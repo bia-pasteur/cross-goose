@@ -1,6 +1,9 @@
 import datetime
+import logging
 import os
 import random
+import time
+from contextlib import contextmanager
 
 import imageio
 import matplotlib
@@ -92,3 +95,20 @@ def get_labels_cmap(base_cmap: str = 'RdYlGn'):
 
 def random_adjective():
     return random.choice(list(open('crossgoose/misc/english-adjectives.txt', encoding='utf-8')))[:-1]
+
+
+@contextmanager
+def timer(label: str | None = None):
+    """
+    Usage
+    -----
+    with timer('my heavy step'):
+        do_something()
+    """
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed = time.perf_counter() - start
+        msg = f"[{label}] elapsed: {elapsed:.6f}s" if label else f"elapsed: {elapsed:.6f}s"
+        logging.info(msg)

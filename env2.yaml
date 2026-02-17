@@ -1,0 +1,28 @@
+name: crossgoose2
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+  - edt
+  - fastremap
+  - imageio
+  - ipykernel
+  - lightning
+  - matplotlib
+  - natsort
+  - numba
+  - numpy
+  - pandas
+  - pylint
+  - python=3.12
+  - pytorch
+  - roifile
+  - scikit-image
+  - scipy
+  - tensorboard
+  - tifffile=2025
+  - torchvision
+  - opencv
+  - jsonargparse[signatures]
+  - pip:
+    - fill_voids
