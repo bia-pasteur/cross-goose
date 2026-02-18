@@ -39,7 +39,7 @@ def store_pos_as_attribute(graph: nx.Graph, distance_map: np.ndarray | None = No
     return nx.relabel_nodes(graph, {n: i for i, n in enumerate(graph.nodes())})
 
 
-def one_hot_labels_to_graphs(labels_one_hot: np.ndarray,smoothing:int=16):
+def one_hot_labels_to_graphs(labels_one_hot: np.ndarray, smoothing: int = 16):
     n_instances = len(labels_one_hot)
     graphs = {}
     for k in tqdm(range(n_instances)):
@@ -90,16 +90,17 @@ def to_digraph_with_distance(graph: nx.Graph) -> nx.DiGraph:
     return digraph
 
 
-def relax_attribute(graph: nx.Graph, attr: str, niter: int = 1):
+def relax_attribute(graph: nx.DiGraph, attr: str, niter: int = 1):
     if niter == 0:
         return graph
     new_pos = {}
     for n in graph.nodes():
-        positions = np.array(
-            [graph.nodes[n][attr]]
-            + [graph.nodes[nn][attr]
-                for nn in graph.adj[n]])
-        avg_pos = np.mean(positions, axis=0)
+        neighbors = set(graph.succ[n])
+        neighbors.update(graph.pred[n]) 
+        neighbors.add(n)
+        attr_vals = np.array(
+            [graph.nodes[nn][attr] for nn in neighbors])
+        avg_pos = np.mean(attr_vals, axis=0)
         new_pos[n] = avg_pos.tolist()
     nx.set_node_attributes(graph, new_pos, name=attr)
     if niter == 1:
@@ -124,6 +125,16 @@ def store_graphs_to_yaml(graphs: Dict[int, nx.Graph], file: str):
         json.dump(graph_repr, f)
 
 
+def normalize_vec(vec: np.ndarray, axis: int | None = None) -> np.ndarray:
+    norm = np.linalg.norm(vec, axis=axis, keepdims=True)
+    if axis is None:
+        if norm > 0.0:
+            vec = vec / norm
+    else:
+        vec = np.where(norm > 0.0, vec/norm, vec)
+    return vec
+
+
 def compute_tangents(graph: nx.DiGraph):
     for n in graph.nodes():
         suc = next(iter(graph.succ[n]))
@@ -133,41 +144,37 @@ def compute_tangents(graph: nx.DiGraph):
         else:
             vec = np.array(graph.nodes[suc]['pos']) - \
                 np.array(graph.nodes[n]['pos'])
-        norm = np.linalg.norm(vec)
-        if norm > 0.0:
-            vec = vec / norm
-        graph.nodes[n]['tan'] = vec.tolist()
+
+        graph.nodes[n]['tan'] = normalize_vec(vec).tolist()
 
 
 class AnalyticalFlow:
     def __init__(
         self,
-        graph_dict: Dict[str, nx.Graph],
-        degree: int,
-        n_neighbors: int
+        graph_dict: Dict[str, nx.DiGraph],
+        n_interpol: int
     ):
-
         self.graph_dict = graph_dict
+        self.n_interpol = n_interpol
 
         self.kdtrees = {
             k: KDTree(np.array([g.nodes[n]['pos'] for n in g.nodes()])) for k, g in self.graph_dict.items()
         }
 
-        self.targets = {
-            k: np.array([
-                g.nodes[
-                    get_nth_predecessor(g, n, degree)
-                ]['pos']
-                for n in g.nodes()])
-            for k, g in self.graph_dict.items()}
-
-        self.n_neighbors = n_neighbors
+        self.positions = {k: np.array([
+            g.nodes[n]['pos'] for n in g.nodes()
+        ]) for k, g in self.graph_dict.items()}
+        self.radiuses = {k: np.array([
+            g.nodes[n]['rad'] for n in g.nodes()
+        ]) for k, g in self.graph_dict.items()}
+        self.tangents = {k: np.array([
+            g.nodes[n]['tan'] for n in g.nodes()
+        ]) for k, g in self.graph_dict.items()}
 
     @classmethod
     def from_onehot(
         self,
         labels_one_hot: np.ndarray,
-        degree: int,
         n_neighbors: int
     ):
         graphs = one_hot_labels_to_graphs(
@@ -175,28 +182,31 @@ class AnalyticalFlow:
         )
         return AnalyticalFlow(
             graph_dict=graphs,
-            degree=degree,
-            n_neighbors=n_neighbors
+            n_interpol=n_neighbors
         )
 
     def get_flow(self, label: int, pos: np.ndarray):
         # inverse distance weighting https://stackoverflow.com/questions/3104781/inverse-distance-weighted-idw-interpolation-with-python
 
-        if self.n_neighbors > 1:
-            distances, nearest_vertices = self.kdtrees[label].query(
-                pos, k=self.n_neighbors)
-            inv_distances = 1 / np.clip(distances, 1e-16, np.inf)
-            inv_distances = inv_distances / np.sum(inv_distances)
-            targets = self.targets[label][nearest_vertices]
-            target = np.sum(targets * inv_distances[:, None], axis=0)
-        elif self.n_neighbors == 1:
-            _, nearest_vertex = self.kdtrees[label].query(pos)
-            target = self.targets[label][nearest_vertex]
-        else:
-            raise ValueError(self.n_neighbors)
+        distance, nearest_vertex = self.kdtrees[label].query(
+            pos, k=self.n_interpol)
 
-        vec = (target - pos)
-        norm = np.linalg.norm(vec)
-        if norm > 0.0:
-            vec = vec / norm
+        # distances and nearest_vertex might be arrays if self.n_interpol > 1
+        target = self.positions[label][nearest_vertex]
+        tangent = self.tangents[label][nearest_vertex]
+        radius = self.radiuses[label][nearest_vertex]
+
+        antinormal = normalize_vec(target - pos, axis=-1)
+        alpha = np.clip(distance / radius, 0.0, 1.0)
+        if self.n_interpol > 1:
+            alpha = alpha[:, None]
+        vec = alpha * antinormal + (1-alpha) * tangent
+
+        if self.n_interpol > 1:
+            # agglomerate results if interpolating
+            weights = 1 / np.clip(distance, 1e-16, np.inf)
+            weights = weights / np.sum(weights)
+            vec = np.sum(vec * weights[:, None], axis=0)
+
+        vec = normalize_vec(vec)
         return vec
