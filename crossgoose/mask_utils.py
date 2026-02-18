@@ -170,7 +170,7 @@ def close_mask(mask: np.ndarray):
         _, num = skimage.measure.label(
             mask_new, return_num=True, connectivity=1)
         if r > 256:
-            raise ValueError(r)
+            raise ValueError("too much dilation")
     if r > 64:
         logging.info('closed mask with radius %d', r)
 

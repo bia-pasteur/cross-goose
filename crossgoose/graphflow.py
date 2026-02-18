@@ -155,10 +155,12 @@ class AnalyticalFlow:
     def __init__(
         self,
         graph_dict: Dict[str, nx.DiGraph],
-        n_interpol: int
+        n_interpol: int,
+        mode:str
     ):
         self.graph_dict = graph_dict
         self.n_interpol = n_interpol
+        self.mode = mode
 
         self.kdtrees = {
             k: KDTree(np.array([g.nodes[n]['pos'] for n in g.nodes()])) for k, g in self.graph_dict.items()
@@ -174,19 +176,19 @@ class AnalyticalFlow:
             g.nodes[n]['tan'] for n in g.nodes()
         ]) for k, g in self.graph_dict.items()}
 
-    @classmethod
-    def from_onehot(
-        self,
-        labels_one_hot: np.ndarray,
-        n_neighbors: int
-    ):
-        graphs = one_hot_labels_to_graphs(
-            labels_one_hot=labels_one_hot
-        )
-        return AnalyticalFlow(
-            graph_dict=graphs,
-            n_interpol=n_neighbors
-        )
+    # @classmethod
+    # def from_onehot(
+    #     self,
+    #     labels_one_hot: np.ndarray,
+    #     n_neighbors: int
+    # ):
+    #     graphs = one_hot_labels_to_graphs(
+    #         labels_one_hot=labels_one_hot
+    #     )
+    #     return AnalyticalFlow(
+    #         graph_dict=graphs,
+    #         n_interpol=n_neighbors,
+    #     )
 
     def get_flow(self, label: int, pos: np.ndarray):
         # inverse distance weighting https://stackoverflow.com/questions/3104781/inverse-distance-weighted-idw-interpolation-with-python
@@ -194,17 +196,30 @@ class AnalyticalFlow:
         distance, nearest_vertex = self.kdtrees[label].query(
             pos, k=self.n_interpol)
 
-        # distances and nearest_vertex might be arrays if self.n_interpol > 1
-        target = self.positions[label][nearest_vertex]
-        tangent = self.tangents[label][nearest_vertex]
-        radius = self.radiuses[label][nearest_vertex]
+        if self.mode == 'normtan':
+            # distances and nearest_vertex might be arrays if self.n_interpol > 1
+            target = self.positions[label][nearest_vertex]
+            tangent = self.tangents[label][nearest_vertex]
+            radius = self.radiuses[label][nearest_vertex]
 
-        antinormal = normalize_vec(target - pos, axis=-1)
-        alpha = np.clip(distance / radius, 0.0, 1.0)
-        if self.n_interpol > 1:
-            alpha = alpha[:, None]
-        vec = alpha * antinormal + (1-alpha) * tangent
+            antinormal = normalize_vec(target - pos, axis=-1)
+            alpha = np.clip(distance / radius, 0.0, 1.0)
+            if self.n_interpol > 1:
+                alpha = alpha[:, None]
+            vec = alpha * antinormal + (1-alpha) * tangent
 
+            
+        elif self.mode == 'target':
+            # distances and nearest_vertex might be arrays if self.n_interpol > 1
+            target = self.positions[label][nearest_vertex]
+            tangent = self.tangents[label][nearest_vertex]
+            radius = self.radiuses[label][nearest_vertex]
+
+            target = target + tangent
+            vec = target - pos
+        else:
+            raise ValueError(self.mode)
+        
         if self.n_interpol > 1:
             # agglomerate results if interpolating
             weights = 1 / np.clip(distance, 1e-16, np.inf)
@@ -212,4 +227,5 @@ class AnalyticalFlow:
             vec = np.sum(vec * weights[:, None], axis=0)
 
         vec = normalize_vec(vec)
+
         return vec
