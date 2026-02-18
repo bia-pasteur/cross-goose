@@ -18,6 +18,33 @@ def get_nth_predecessor(graph: nx.Graph, vert, n: int) -> int:
     return vert
 
 
+def subsample_graph(graph: nx.Graph, factor: int):
+    to_remove = [
+        n for n in graph.nodes()
+        if (graph.degree[n] == 2) and (n % factor != 0)
+    ]
+    for n in to_remove:
+        adj0, adj1 = graph.adj[n]
+        graph.remove_node(n)
+        graph.add_edge(adj0, adj1)
+    return graph
+
+
+def one_hot_labels_to_graphs(labels_one_hot: np.ndarray):
+    n_instances = len(labels_one_hot)
+    graphs = {}
+    for k in tqdm(range(n_instances)):
+        mask = labels_one_hot[k]
+        skel = skeletonize(mask)
+        graph = get_networkx_graph_from_array(skel)
+        # graph = convert_graph_to_native_int(graph)
+        graph = store_pos_in_key(graph)
+        store_predecessor_and_distance(graph)
+
+        graphs[k+1] = graph
+    return graphs
+
+
 class AnalyticalFlow:
     def __init__(
         self,
@@ -49,47 +76,14 @@ class AnalyticalFlow:
         degree: int,
         n_neighbors: int
     ):
-        n_instances = len(labels_one_hot)
-        graphs = {}
-        for k in tqdm(range(n_instances)):
-            mask = labels_one_hot[k]
-            skel = skeletonize(mask)
-            graph = get_networkx_graph_from_array(skel)
-            # graph = convert_graph_to_native_int(graph)
-            graph = store_pos_in_key(graph)
-
-            store_predecessor_and_distance(graph)
-
-            graphs[k+1] = graph
+        graphs = one_hot_labels_to_graphs(
+            labels_one_hot=labels_one_hot
+        )
         return AnalyticalFlow(
             graph_dict=graphs,
             degree=degree,
             n_neighbors=n_neighbors
         )
-
-    # @classmethod
-    # def from_file(
-    #     self,
-    #     file: str,
-    #     degree: int,
-    #     n_neighbors: int
-    # ):
-    #     with open(file, 'r', encoding='utf-8') as f:
-    #         data = json.load(f)
-    #     graphs = {}
-    #     for k, v in data.items():
-    #         graphs[int(k)] = nx.adjacency_graph(v)
-    #     return AnalyticalFlow(
-    #         graph_dict=graphs,
-    #         degree=degree,
-    #         n_neighbors=n_neighbors
-    #     )
-
-    # def to_file(self, file: str):
-    #     graph_repr = {k: nx.adjacency_data(g)
-    #                   for k, g in self.graph_dict.items()}
-    #     with open(file, 'w', encoding='utf-8') as f:
-    #         json.dump(graph_repr, f)
 
     def get_flow(self, label: int, pos: np.ndarray):
         # inverse distance weighting https://stackoverflow.com/questions/3104781/inverse-distance-weighted-idw-interpolation-with-python
