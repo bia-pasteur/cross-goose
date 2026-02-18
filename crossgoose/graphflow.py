@@ -47,6 +47,9 @@ def one_hot_labels_to_graphs(labels_one_hot: np.ndarray, smoothing: int = 16):
         skel = skeletonize(mask)
         dist = edt.edt(mask)
         graph = get_networkx_graph_from_array(skel)
+        n_comp = len(list(nx.connected_components(graph)))
+        if n_comp>1:
+            raise ValueError("graph has multiple disjoint components")
         # graph = convert_graph_to_native_int(graph)
         graph = store_pos_as_attribute(graph, distance_map=dist)
         # store_predecessor_and_distance(graph)
@@ -96,7 +99,7 @@ def relax_attribute(graph: nx.DiGraph, attr: str, niter: int = 1):
     new_pos = {}
     for n in graph.nodes():
         neighbors = set(graph.succ[n])
-        neighbors.update(graph.pred[n]) 
+        neighbors.update(graph.pred[n])
         neighbors.add(n)
         attr_vals = np.array(
             [graph.nodes[nn][attr] for nn in neighbors])

@@ -1,4 +1,7 @@
+import logging
 from enum import Enum
+from functools import partial
+from multiprocessing import Pool
 from typing import Literal
 
 import edt
@@ -150,24 +153,43 @@ def save_masks(masks: np.ndarray, file: str, format: SaveFormat):
     )
 
 
+def compute_instance_mask(k: int, labels):
+    mask_bin = close_mask(labels == k)
+    return mask_bin
+
+
+def close_mask(mask: np.ndarray):
+    _, num = skimage.measure.label(mask, return_num=True, connectivity=1)
+    r = 0
+    mask_new = mask
+    while num > 1:
+        r += 1
+        mask_new = skimage.morphology.isotropic_closing(
+            mask, radius=r
+        )
+        _, num = skimage.measure.label(
+            mask_new, return_num=True, connectivity=1)
+        if r > 256:
+            raise ValueError(r)
+    if r > 64:
+        logging.info('closed mask with radius %d', r)
+
+    return mask_new
+
+
 def convert_labels_to_onehot(
     labels: np.ndarray,
-    closure_radius: int | None = None,
+    # closure_radius: int | None = None,
 ) -> np.ndarray:
     max_label = np.max(labels)
     masks_oh = np.zeros((max_label,) + labels.shape, dtype=np.uint)
+    with Pool() as p:
 
-    if closure_radius:
-        disk = skimage.morphology.disk(radius=closure_radius)
-    else:
-        disk = None
-
-    for l in range(max_label+1):
-        if l != 0:
-            mask_bin = labels == l
-            if closure_radius:
-                mask_bin = skimage.morphology.closing(mask_bin, disk)
-            masks_oh[l-1] = (mask_bin).astype(np.uint)
-
-
+        masks_oh = p.map(
+            partial(
+                compute_instance_mask,
+                labels=labels),
+            range(1, max_label+1)
+        )
+        masks_oh = np.stack(masks_oh, axis=0)
     return masks_oh
