@@ -110,5 +110,5 @@ def timer(label: str | None = None):
         yield
     finally:
         elapsed = time.perf_counter() - start
-        msg = f"[{label}] elapsed: {elapsed:.6f}s" if label else f"elapsed: {elapsed:.6f}s"
+        msg = f"{label}: {elapsed:.6f}s" if label else f"elapsed: {elapsed:.6f}s"
         logging.info(msg)
