@@ -2,15 +2,20 @@
 
 import json
 import logging
-from typing import Dict
+from typing import Dict, Literal
 
 import networkx as nx
 import numpy as np
+import scipy
 from scipy.spatial import KDTree
+import skimage
 from skimage.morphology import skeletonize
 from tqdm import tqdm
 import edt
+from crossgoose.cellpose.dynamics import masks_to_flows_gpu
 from crossgoose.graph_utils import get_networkx_graph_from_array
+from scipy.ndimage import find_objects
+from scipy.interpolate import interpn
 
 
 def get_nth_predecessor(graph: nx.DiGraph, vert, n: int) -> int:
@@ -20,7 +25,7 @@ def get_nth_predecessor(graph: nx.DiGraph, vert, n: int) -> int:
 
 
 def store_pos_as_attribute(graph: nx.Graph, distance_map: np.ndarray | None = None) -> nx.Graph:
-    """stores node position as a list in 'pos' attribute, 
+    """stores node position as a list in 'pos' attribute,
     if distance_map is supplied, the thickness/radius is stored as 'rad',
     nodes are expected to be tuples (i,j), then relabeled as just ints
 
@@ -48,7 +53,7 @@ def one_hot_labels_to_graphs(labels_one_hot: np.ndarray, smoothing: int = 16):
         dist = edt.edt(mask)
         graph = get_networkx_graph_from_array(skel)
         n_comp = len(list(nx.connected_components(graph)))
-        if n_comp>1:
+        if n_comp > 1:
             raise ValueError("graph has multiple disjoint components")
         # graph = convert_graph_to_native_int(graph)
         graph = store_pos_as_attribute(graph, distance_map=dist)
@@ -151,49 +156,50 @@ def compute_tangents(graph: nx.DiGraph):
         graph.nodes[n]['tan'] = normalize_vec(vec).tolist()
 
 
+AFMode = Literal['normtan', 'target']
+
+
 class AnalyticalFlow:
     def __init__(
         self,
         graph_dict: Dict[str, nx.DiGraph],
         n_interpol: int,
-        mode:str
+        alpha_pow: float,
+        mode: AFMode,
+        subsample_fac: int
     ):
         self.graph_dict = graph_dict
         self.n_interpol = n_interpol
         self.mode = mode
+        self.alpha_pow = alpha_pow
 
-        self.kdtrees = {
-            k: KDTree(np.array([g.nodes[n]['pos'] for n in g.nodes()])) for k, g in self.graph_dict.items()
+        if subsample_fac != 1:
+            selected_nodes = {
+                k: list(g.nodes())[::subsample_fac] for k, g in self.graph_dict.items()
+            }
+        else:
+            selected_nodes = {
+                k: g.nodes() for k, g in self.graph_dict.items()
+            }
+
+        self.points = {
+            k: KDTree(np.array([self.graph_dict[k].nodes[n]['pos'] for n in g])) for k, g in selected_nodes.items()
         }
 
         self.positions = {k: np.array([
-            g.nodes[n]['pos'] for n in g.nodes()
-        ]) for k, g in self.graph_dict.items()}
+            self.graph_dict[k].nodes[n]['pos'] for n in g
+        ]) for k, g in selected_nodes.items()}
         self.radiuses = {k: np.array([
-            g.nodes[n]['rad'] for n in g.nodes()
-        ]) for k, g in self.graph_dict.items()}
+            self.graph_dict[k].nodes[n]['rad'] for n in g
+        ]) for k, g in selected_nodes.items()}
         self.tangents = {k: np.array([
-            g.nodes[n]['tan'] for n in g.nodes()
-        ]) for k, g in self.graph_dict.items()}
+            self.graph_dict[k].nodes[n]['tan'] for n in g
+        ]) for k, g in selected_nodes.items()}
 
-    # @classmethod
-    # def from_onehot(
-    #     self,
-    #     labels_one_hot: np.ndarray,
-    #     n_neighbors: int
-    # ):
-    #     graphs = one_hot_labels_to_graphs(
-    #         labels_one_hot=labels_one_hot
-    #     )
-    #     return AnalyticalFlow(
-    #         graph_dict=graphs,
-    #         n_interpol=n_neighbors,
-    #     )
-
-    def get_flow(self, label: int, pos: np.ndarray):
+    def query(self, label: int, pos: np.ndarray):
         # inverse distance weighting https://stackoverflow.com/questions/3104781/inverse-distance-weighted-idw-interpolation-with-python
 
-        distance, nearest_vertex = self.kdtrees[label].query(
+        distance, nearest_vertex = self.points[label].query(
             pos, k=self.n_interpol)
 
         if self.mode == 'normtan':
@@ -202,13 +208,13 @@ class AnalyticalFlow:
             tangent = self.tangents[label][nearest_vertex]
             radius = self.radiuses[label][nearest_vertex]
 
-            antinormal = normalize_vec(target - pos, axis=-1)
-            alpha = np.clip(distance / radius, 0.0, 1.0)
+            antinormal = normalize_vec(target - pos[..., None, :], axis=-1)
+            alpha = np.clip(np.power(distance / radius,
+                            self.alpha_pow), 0.0, 1.0)
             if self.n_interpol > 1:
-                alpha = alpha[:, None]
+                alpha = alpha[..., None]
             vec = alpha * antinormal + (1-alpha) * tangent
 
-            
         elif self.mode == 'target':
             # distances and nearest_vertex might be arrays if self.n_interpol > 1
             target = self.positions[label][nearest_vertex]
@@ -219,13 +225,103 @@ class AnalyticalFlow:
             vec = target - pos
         else:
             raise ValueError(self.mode)
-        
+
         if self.n_interpol > 1:
             # agglomerate results if interpolating
             weights = 1 / np.clip(distance, 1e-16, np.inf)
             weights = weights / np.sum(weights)
-            vec = np.sum(vec * weights[:, None], axis=0)
+            vec = np.sum(vec * weights[..., None], axis=-2)
 
-        vec = normalize_vec(vec)
+        vec = normalize_vec(vec, axis=-1)
+
+        return vec
+
+
+class AnalyticalFlow2EletricBoogaloo:
+    def __init__(
+        self,
+        labels_one_hot: np.ndarray,
+        n_interpol: int,
+        inside_sub_sampling: int,
+        contour_sub_sampling: int,
+        contour_method: str
+    ):
+        self.n_interpol = n_interpol
+
+        n_labels = labels_one_hot.shape[0]
+        self.points: Dict[str, KDTree] = {}
+        self.flows: Dict[str, np.ndarray] = {}
+        for k in range(n_labels):
+            mask = labels_one_hot[k]
+            # compute classical cp flow
+            # first get the local mask
+            slices = find_objects(mask.astype(int))
+            assert len(slices) == 1
+            slice_k = slices[0]
+            padding = 2
+            offest_i, offset_j = slice_k[0].start, slice_k[1].start
+            offset = np.array([offest_i, offset_j]) - padding
+
+            mask_local = np.pad(mask[slice_k], pad_width=padding)
+            mask_local_dil = skimage.morphology.isotropic_dilation(
+                mask_local, radius=1)
+            flow_local, _ = masks_to_flows_gpu(mask_local_dil.astype(int))
+
+            if contour_method == 'dilation':
+                contours_local = np.stack(np.nonzero(
+                    (mask_local_dil != mask_local)[::contour_sub_sampling, ::contour_sub_sampling]), axis=1) * contour_sub_sampling
+
+            elif contour_method == 'marching_squares':
+                ct = skimage.measure.find_contours(
+                    mask_local)
+                if len(ct) == 0:
+                    contours_local = np.zeros((0, 2))
+                else:
+                    contours_local = np.concat(ct, axis=0)[::contour_sub_sampling]
+
+            else:
+                raise ValueError
+
+            inside = np.stack(np.nonzero(
+                mask_local[::inside_sub_sampling, ::inside_sub_sampling]), axis=1) * inside_sub_sampling
+
+            points = np.concat([contours_local, inside], axis=0)
+            points = np.unique(points, axis=0)
+
+            self.points[k+1] = KDTree(points + offset[None, :])
+
+            h, w = mask_local.shape
+            flows = interpn(
+                points=(np.arange(h), np.arange(w)),
+                values=flow_local.transpose((1, 2, 0)),
+                xi=points,
+                method='cubic'
+            )
+            self.flows[k+1] = flows
+
+    def to_file(self, file: str):
+
+        data = {
+            'points': {k: v.data.tolist() for k, v in self.points.items()},
+            'flows': {k: v.tolist() for k, v in self.flows.items()}
+        }
+
+        with open(file, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+
+    def query(self, label: int, pos: np.ndarray):
+
+        distance, nearest_vertex = self.points[label].query(
+            pos, k=self.n_interpol)
+
+        vec = self.flows[label][nearest_vertex]
+
+        if self.n_interpol > 1:
+            # agglomerate results if interpolating
+            weights = 1 / np.clip(distance, 1.0, np.inf)
+            weights = weights / np.sum(weights)
+            vec = np.sum(vec * weights[..., None], axis=-2)
+
+        vec = normalize_vec(vec, axis=-1)
 
         return vec
