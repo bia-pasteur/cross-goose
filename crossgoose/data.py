@@ -56,7 +56,7 @@ def random_transform(
     scale_range: Tuple[float, float] | None = None,
     v_fill_img: float = -1,
     deterministic_patch: bool = False,
-    relabel: bool=True,
+    relabel: bool = True,
 ):
     # expects no bach dim
     transforms = dict()
@@ -274,15 +274,16 @@ class FlowDataset(Dataset):
 
         self.directory = directory
 
-        self._fetch_files()    
+        self._fetch_files()
 
         assert len(self.images_files) > 0
         assert len(self.images_files) == len(self.masks_files)
         if not len(self.images_files) == len(self.masks_onehot_files):
             print(f"[{self.name}] missing onehot masks: generating ...")
             self.generate_one_hot_masks()
-            self._fetch_files()  
-            assert len(self.images_files) == len(self.masks_onehot_files), (self.images_files,self.masks_onehot_files)
+            self._fetch_files()
+            assert len(self.images_files) == len(
+                self.masks_onehot_files), (self.images_files, self.masks_onehot_files)
 
         self.flow_files = []
         desc = f"[{self.name}] " + ("recomputing" if recompute_flows else "checking/computing") + \
@@ -291,7 +292,7 @@ class FlowDataset(Dataset):
             m = re.match(r'(.*)\_img\.(tif|png)', filename)
             assert m is not None, f"image file {filename} does not match pattern .*_img.tif"
             image_name = m.group(1)
-            flow_file = f"{image_name}_flows_alpha{alpha_heat}_{center_method}_c{default(closure_radius,0)}.tif"
+            flow_file = f"{image_name}_flows_alpha{alpha_heat}_{center_method}_c{default(closure_radius, 0)}.tif"
             flow_file_path = os.path.join(self.directory, flow_file)
             compute_flow = ((not os.path.exists(flow_file_path))
                             and (not self.lazy_flow_computing))
@@ -309,7 +310,7 @@ class FlowDataset(Dataset):
             self.buffer = None
 
     def _fetch_files(self):
-        
+
         dir_file = os.listdir(self.directory)
 
         self.images_files = natsorted(
@@ -322,13 +323,13 @@ class FlowDataset(Dataset):
     def generate_one_hot_masks(self):
         for masks_file in tqdm(self.masks_files, desc=f'computing onehot masks for {self.name}'):
             name, _ = masks_file.split('.')
-            file = os.path.join(self.directory,f"{name}_onehot.tif")
+            file = os.path.join(self.directory, f"{name}_onehot.tif")
             if not os.path.exists(file):
                 labels = imread(os.path.join(
                     self.directory, masks_file))
                 mask_onehot = convert_labels_to_onehot(
                     labels, closure_radius=self.closure_radius)
-                
+
                 tifffile.imwrite(
                     file,
                     data=mask_onehot,
@@ -395,8 +396,9 @@ class FlowDataset(Dataset):
             assert len(flows.shape) == 4
             data['flows'] = torch.tensor(flows, dtype=torch.float)
 
-            #sanity check
-            assert np.max(labels) == flows.shape[0], f"got max label {np.max(labels)} and {flows.shape[0]} flow slices"
+            # sanity check
+            assert np.max(
+                labels) == flows.shape[0], f"got max label {np.max(labels)} and {flows.shape[0]} flow slices"
 
             if self.return_overlap_map:
                 labels_oh = imread(os.path.join(self.directory,
@@ -507,7 +509,7 @@ class MultiDataset(Dataset):
 class FlowDataModule(lightning.LightningDataModule):
     def __init__(
             self,
-            data_root:str,
+            data_root: str,
             dataset: str | List[str],
             batch_size: int,
             num_workers: int,
@@ -528,7 +530,7 @@ class FlowDataModule(lightning.LightningDataModule):
             image_normalization: ImageNormalization = 'M1P1'
     ):
         super().__init__()
-        data_dir = os.path.join(data_root,dataset)
+        data_dir = os.path.join(data_root, dataset)
 
         self.data_dir = data_dir
         self.prefetch_factor = prefetch_factor
