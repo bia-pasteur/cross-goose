@@ -153,12 +153,7 @@ def save_masks(masks: np.ndarray, file: str, format: SaveFormat):
     )
 
 
-def compute_instance_mask(k: int, labels):
-    mask_bin = close_mask(labels == k)
-    return mask_bin
-
-
-def close_mask(mask: np.ndarray):
+def auto_close_mask(mask: np.ndarray, max_radius: int = 256):
     _, num = skimage.measure.label(mask, return_num=True, connectivity=2)
     r = 0
     mask_new = mask
@@ -169,26 +164,47 @@ def close_mask(mask: np.ndarray):
         )
         _, num = skimage.measure.label(
             mask_new, return_num=True, connectivity=2)
-        if r > 256:
-            raise ValueError("too much dilation")
-    if r > 64:
-        logging.info('closed mask with radius %d', r)
+        if r > max_radius:
+            logging.warning(
+                'mask reached max dilation radius %d when trying to close, returning last mask', r)
+            return mask_new
 
     return mask_new
 
 
+def compute_instance_mask(
+    k: int,
+    labels: np.ndarray,
+    closure_radius: int | Literal['auto'] = 0,
+    max_radius: int = 256
+):
+    base_mask = labels == k
+    if closure_radius == 'auto':
+        return auto_close_mask(base_mask, max_radius=max_radius)
+    elif isinstance(closure_radius, int):
+        if closure_radius == 0:
+            return base_mask
+
+        return skimage.morphology.isotropic_closing(
+            base_mask, radius=closure_radius
+        )
+    else:
+        raise ValueError(closure_radius)
+
+
 def convert_labels_to_onehot(
     labels: np.ndarray,
-    # closure_radius: int | None = None,
+    **kwargs
 ) -> np.ndarray:
     max_label = np.max(labels)
     masks_oh = np.zeros((max_label,) + labels.shape, dtype=np.uint)
-    with Pool() as p:
 
+    with Pool() as p:
         masks_oh = p.map(
             partial(
                 compute_instance_mask,
-                labels=labels),
+                labels=labels,
+                **kwargs),
             range(1, max_label+1)
         )
         masks_oh = np.stack(masks_oh, axis=0)
