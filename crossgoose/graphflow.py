@@ -2,20 +2,22 @@
 
 import json
 import logging
-from typing import Dict, Literal
+from pathlib import Path
+from typing import Dict, Literal, Self, Tuple
 
+import edt
 import networkx as nx
 import numpy as np
 import scipy
-from scipy.spatial import KDTree
 import skimage
+from scipy.interpolate import interpn
+from scipy.ndimage import find_objects
+from scipy.spatial import KDTree
 from skimage.morphology import skeletonize
 from tqdm import tqdm
-import edt
+
 from crossgoose.cellpose.dynamics import masks_to_flows_gpu
 from crossgoose.graph_utils import get_networkx_graph_from_array
-from scipy.ndimage import find_objects
-from scipy.interpolate import interpn
 
 
 def get_nth_predecessor(graph: nx.DiGraph, vert, n: int) -> int:
@@ -237,20 +239,31 @@ class AnalyticalFlow:
         return vec
 
 
-class AnalyticalFlow2EletricBoogaloo:
+class GridFlow:
     def __init__(
+        self,
+        points: Dict[str, KDTree],
+        flows: Dict[str, np.ndarray],
+        n_interpol: int
+    ):
+        self.points = points
+        self.flows = flows
+        self.n_interpol = n_interpol
+
+    @classmethod
+    def from_one_hot(
         self,
         labels_one_hot: np.ndarray,
         n_interpol: int,
         inside_sub_sampling: int,
         contour_sub_sampling: int,
-        contour_method: str
-    ):
-        self.n_interpol = n_interpol
+        contour_method: Literal['marching_squares',
+                                'dilation'] = 'marching_squares'
+    ) -> Self:
 
         n_labels = labels_one_hot.shape[0]
-        self.points: Dict[str, KDTree] = {}
-        self.flows: Dict[str, np.ndarray] = {}
+        points: Dict[str, KDTree] = {}
+        flows: Dict[str, np.ndarray] = {}
         for k in range(n_labels):
             mask = labels_one_hot[k]
             # compute classical cp flow
@@ -277,7 +290,8 @@ class AnalyticalFlow2EletricBoogaloo:
                 if len(ct) == 0:
                     contours_local = np.zeros((0, 2))
                 else:
-                    contours_local = np.concat(ct, axis=0)[::contour_sub_sampling]
+                    contours_local = np.concat(ct, axis=0)[
+                        ::contour_sub_sampling]
 
             else:
                 raise ValueError
@@ -285,34 +299,65 @@ class AnalyticalFlow2EletricBoogaloo:
             inside = np.stack(np.nonzero(
                 mask_local[::inside_sub_sampling, ::inside_sub_sampling]), axis=1) * inside_sub_sampling
 
-            points = np.concat([contours_local, inside], axis=0)
-            points = np.unique(points, axis=0)
+            points_k = np.concat([contours_local, inside], axis=0)
+            points_k = np.unique(points_k, axis=0)
 
-            self.points[k+1] = KDTree(points + offset[None, :])
+            points[k+1] = KDTree(points_k + offset[None, :])
 
             h, w = mask_local.shape
-            flows = interpn(
+            flows_k = interpn(
                 points=(np.arange(h), np.arange(w)),
                 values=flow_local.transpose((1, 2, 0)),
-                xi=points,
+                xi=points_k,
                 method='cubic'
             )
-            self.flows[k+1] = flows
+            flows[k+1] = flows_k
 
-    def to_file(self, file: str):
+        return GridFlow(
+            points=points,
+            flows=flows,
+            n_interpol=n_interpol
+        )
 
-        data = {
-            'points': {k: v.data.tolist() for k, v in self.points.items()},
-            'flows': {k: v.tolist() for k, v in self.flows.items()}
-        }
+    def to_file(self, file: Path):
 
-        with open(file, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
+        file = Path(file)
+        assert file.suffix == '.npz'
 
-    def query(self, label: int, pos: np.ndarray):
+        points = {k: v.data.copy() for k, v in self.points.items()}
+        flows = {k: v.copy() for k, v in self.flows.items()}
+
+        data_flat = {f'points/{k}': v for k, v in points.items()}
+        data_flat.update({f'flows/{k}': v for k, v in flows.items()})
+
+        np.savez_compressed(file, **data_flat, allow_pickle=False)
+
+    @classmethod
+    def from_file(self, file: Path, n_interpol) -> Self:
+        data = np.load(file)
+        points = {}
+        flows = {}
+        for k, v in data.items():
+            kind, label = k.split('/')
+            label = int(label)
+            if kind == 'points':
+                points[label] = KDTree(v)
+            elif kind == 'flows':
+                flows[label] = v
+            else:
+                raise KeyError(
+                    f'key {k} does not match points/label or flow/label')
+
+        return GridFlow(
+            points=points,
+            flows=flows,
+            n_interpol=n_interpol
+        )
+
+    def query(self, x: np.ndarray, label: int) -> np.ndarray:
 
         distance, nearest_vertex = self.points[label].query(
-            pos, k=self.n_interpol)
+            x, k=self.n_interpol)
 
         vec = self.flows[label][nearest_vertex]
 
@@ -325,3 +370,9 @@ class AnalyticalFlow2EletricBoogaloo:
         vec = normalize_vec(vec, axis=-1)
 
         return vec
+
+    def query_flow_grid(self, label: int, shape: Tuple[int, int]) -> np.ndarray:
+        h, w = shape
+        pts = np.reshape(np.mgrid[:h, :w], (2, -1)).transpose()
+        flow = self.query(x=pts, label=label).transpose().reshape((2, h, w))
+        return flow
