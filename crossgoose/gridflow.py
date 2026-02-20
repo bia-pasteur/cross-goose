@@ -9,7 +9,6 @@ from scipy.interpolate import interpn
 from scipy.ndimage import find_objects
 from scipy.spatial import KDTree
 
-from crossgoose.cellpose.dynamics import masks_to_flows_gpu
 from crossgoose.dynamics import cp_masks_to_flows_gpu
 from crossgoose.mask_utils import CenterMethod
 from crossgoose.utils import normalize_vec
