@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from scipy.ndimage import find_objects
 from torch import nn
 
+from crossgoose.cellpose.dynamics import _extend_centers_gpu
 from crossgoose.mask_utils import CenterMethod, get_centers
 
 
@@ -154,7 +155,7 @@ def extented_diffusion(
 
             mu = np.clip(mu, -1, 1)
 
-            T = T.cpu().numpy()[:,1:-1,1:-1]
+            T = T.cpu().numpy()[:, 1:-1, 1:-1]
         except torch.OutOfMemoryError as e:
             raise e
 
@@ -242,3 +243,74 @@ def large_steps_diffusion(
     new_mu[u_instance, :, u0[:, 0].long(), u0[:, 1].long()] = vec
 
     return new_mu.numpy(), mu.numpy()
+
+
+def cp_masks_to_flows_gpu(masks, device=torch.device("cpu"), niter=None, center_method: CenterMethod = 'mass'):
+    """Convert masks to flows using diffusion from center pixel.
+
+    Center of masks where diffusion starts is defined by pixel closest to median within the mask.
+
+    Args:
+        masks (int, 2D or 3D array): Labelled masks. 0=NO masks; 1,2,...=mask labels.
+        device (torch.device, optional): The device to run the computation on. Defaults to torch.device("cpu").
+        niter (int, optional): Number of iterations for the diffusion process. Defaults to None.
+
+    Returns:
+        np.ndarray: A 4D array representing the flows for each pixel in Z, X, and Y.
+
+
+    Returns:
+        A tuple containing (mu, meds_p). mu is float 3D or 4D array of flows in (Z)XY. 
+        meds_p are cell centers.
+    """
+    if device is None:
+        device = torch.device('cuda') if torch.cuda.is_available() else torch.device(
+            'mps') if torch.backends.mps.is_available() else None
+
+    Ly0, Lx0 = masks.shape
+
+    masks_padded = torch.from_numpy(masks.astype("int64")).to(device)
+    masks_padded = F.pad(masks_padded, (1, 1, 1, 1))
+    shape = masks_padded.shape
+
+    # get mask pixel neighbors
+    y, x = torch.nonzero(masks_padded, as_tuple=True)
+    y = y.int()
+    x = x.int()
+    neighbors = torch.zeros((2, 9, y.shape[0]), dtype=torch.int, device=device)
+    yxi = [[0, -1, 1, 0, 0, -1, -1, 1, 1], [0, 0, 0, -1, 1, -1, 1, -1, 1]]
+    for i in range(9):
+        neighbors[0, i] = y + yxi[0][i]
+        neighbors[1, i] = x + yxi[1][i]
+    isneighbor = torch.ones((9, y.shape[0]), dtype=torch.bool, device=device)
+    m0 = masks_padded[neighbors[0, 0], neighbors[1, 0]]
+    for i in range(1, 9):
+        isneighbor[i] = masks_padded[neighbors[0, i], neighbors[1, i]] == m0
+    del m0, masks_padded
+
+    # get center-of-mass within cell
+    slices = find_objects(masks)
+    # turn slices into array
+    # slices = np.array([
+    #     np.array([i, si[0].start, si[0].stop, si[1].start, si[1].stop])
+    #     for i, si in enumerate(slices)
+    #     if si is not None
+    # ])
+    centers, ext = get_centers(masks, slices, method=center_method)
+    meds_p = torch.from_numpy(centers).to(device).long()
+    meds_p += 1  # for padding
+
+    # run diffusion
+    n_iter = 2 * ext.max() if niter is None else niter
+    mu = _extend_centers_gpu(neighbors, meds_p, isneighbor, shape, n_iter=n_iter,
+                             device=device)
+    mu = mu.astype("float64")
+
+    # new normalization
+    mu /= (1e-60 + (mu**2).sum(axis=0)**0.5)
+
+    # put into original image
+    mu0 = np.zeros((2, Ly0, Lx0))
+    mu0[:, y.cpu().numpy() - 1, x.cpu().numpy() - 1] = mu
+
+    return mu0, meds_p.cpu().numpy() - 1

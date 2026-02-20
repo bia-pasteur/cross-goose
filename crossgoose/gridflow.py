@@ -10,6 +10,8 @@ from scipy.ndimage import find_objects
 from scipy.spatial import KDTree
 
 from crossgoose.cellpose.dynamics import masks_to_flows_gpu
+from crossgoose.dynamics import cp_masks_to_flows_gpu
+from crossgoose.mask_utils import CenterMethod
 from crossgoose.utils import normalize_vec
 
 
@@ -29,10 +31,12 @@ class GridFlow:
         self,
         labels_one_hot: np.ndarray,
         n_interpol: int,
+        flow_center_method:CenterMethod,
         inside_sub_sampling: int,
         contour_sub_sampling: int,
         contour_method: Literal['marching_squares',
-                                'dilation'] = 'marching_squares'
+                                'dilation'] = 'marching_squares',
+        flow_compute_device:str='cpu'
     ) -> Self:
 
         n_labels = labels_one_hot.shape[0]
@@ -40,6 +44,8 @@ class GridFlow:
         flows: Dict[str, np.ndarray] = {}
         for k in range(n_labels):
             mask = labels_one_hot[k]
+            mask_size = np.sum(mask)
+            assert mask_size > 0
             # compute classical cp flow
             # first get the local mask
             slices = find_objects(mask.astype(int))
@@ -52,7 +58,11 @@ class GridFlow:
             mask_local = np.pad(mask[slice_k], pad_width=padding)
             mask_local_dil = skimage.morphology.isotropic_dilation(
                 mask_local, radius=1)
-            flow_local, _ = masks_to_flows_gpu(mask_local_dil.astype(int))
+            flow_local, _ = cp_masks_to_flows_gpu(
+                mask_local_dil.astype(int),
+                device=flow_compute_device,
+                center_method=flow_center_method
+            )
 
             if contour_method == 'dilation':
                 contours_local = np.stack(np.nonzero(
