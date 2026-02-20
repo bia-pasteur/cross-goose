@@ -18,11 +18,11 @@ from crossgoose.utils import normalize_vec
 class GridFlow:
     def __init__(
         self,
-        points: Dict[str, KDTree],
+        points: Dict[str, np.ndarray],
         flows: Dict[str, np.ndarray],
         n_interpol: int
     ):
-        self.points = points
+        self.points = {k:KDTree(v) for k,v in points.items()}
         self.flows = flows
         self.n_interpol = n_interpol
 
@@ -86,7 +86,7 @@ class GridFlow:
             points_k = np.concat([contours_local, inside], axis=0)
             points_k = np.unique(points_k, axis=0)
 
-            points[k+1] = KDTree(points_k + offset[None, :])
+            points[k+1] = points_k + offset[None, :]
 
             h, w = mask_local.shape
             flows_k = interpn(
@@ -125,7 +125,7 @@ class GridFlow:
             kind, label = k.split('/')
             label = int(label)
             if kind == 'points':
-                points[label] = KDTree(v)
+                points[label] = v
             elif kind == 'flows':
                 flows[label] = v
             else:
