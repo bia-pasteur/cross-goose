@@ -159,7 +159,7 @@ def compute_instance_mask(k: int, labels):
 
 
 def close_mask(mask: np.ndarray):
-    _, num = skimage.measure.label(mask, return_num=True, connectivity=1)
+    _, num = skimage.measure.label(mask, return_num=True, connectivity=2)
     r = 0
     mask_new = mask
     while num > 1:
@@ -168,7 +168,7 @@ def close_mask(mask: np.ndarray):
             mask, radius=r
         )
         _, num = skimage.measure.label(
-            mask_new, return_num=True, connectivity=1)
+            mask_new, return_num=True, connectivity=2)
         if r > 256:
             raise ValueError("too much dilation")
     if r > 64:

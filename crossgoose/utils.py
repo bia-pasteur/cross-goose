@@ -112,3 +112,22 @@ def timer(label: str | None = None):
         elapsed = time.perf_counter() - start
         msg = f"{label}: {elapsed:.6f}s" if label else f"elapsed: {elapsed:.6f}s"
         logging.info(msg)
+
+
+def normalize_vec(vec: np.ndarray, axis: int | None = None) -> np.ndarray:
+    """Normalize vector along axis
+
+    Args:
+        vec (np.ndarray): vector to normalize
+        axis (int | None, optional): axis to normalize on. Defaults to None.
+
+    Returns:
+        np.ndarray: normalized vector on axis
+    """
+    norm = np.linalg.norm(vec, axis=axis, keepdims=True)
+    if axis is None:
+        if norm > 0.0:
+            vec = vec / norm
+    else:
+        vec = np.where(norm > 0.0, vec/norm, vec)
+    return vec
