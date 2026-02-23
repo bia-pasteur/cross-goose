@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Literal, Tuple
 
+import concurrent
 import lightning
 import numpy as np
 import tifffile
@@ -16,9 +17,9 @@ from torchvision.transforms import InterpolationMode, v2
 from tqdm import tqdm
 
 from crossgoose.cellpose.transforms import get_pad_yx, normalize99
-from crossgoose.dynamics import extented_diffusion
+from crossgoose.gridflow import GridFlow
 from crossgoose.mask_utils import convert_labels_to_onehot
-from crossgoose.utils import default, imread, remap, write_flows_stack
+from crossgoose.utils import default, imread, remap
 
 ImageNormalization = Literal['M1P1', 'N99']
 
@@ -47,7 +48,7 @@ def random_transform(
     image: torch.Tensor,
     labels: torch.Tensor,
     overlap_mask: torch.Tensor,
-    flows: torch.Tensor,
+    flows: GridFlow,
     patch_size: int | None,
     flip_h: bool,
     flip_v: bool,
@@ -61,7 +62,6 @@ def random_transform(
     # expects no bach dim
     transforms = dict()
     assert len(image.shape) == 2
-    assert len(flows.shape) == 4, flows.shape
 
     if scale_range is not None or rotate:
         if scale_range is not None:
@@ -98,27 +98,11 @@ def random_transform(
                 interpolation=InterpolationMode.NEAREST,
                 fill=0
             )[0].long()
-        flows = v2.functional.affine(
-            flows,
+        h, w = image.shape
+        flows = flows.affine_transform(
             **affine_transform,
-            interpolation=InterpolationMode.BILINEAR,
-            fill=0
+            center=(h/w, w/2)
         )
-
-        if angle != 0.0:
-            theta = -affine_transform['angle']/360*2*np.pi
-            rot_matrix = torch.tensor([[np.cos(theta), -np.sin(theta)],
-                                       [np.sin(theta), np.cos(theta)]]).float()
-
-            n, _, h, w = flows.shape
-            flows_flat = flows.permute(1, 0, 2, 3).reshape(2, -1)
-            flows_flat_rot = torch.matmul(rot_matrix, flows_flat)
-            flows = flows_flat_rot.reshape(2, n, h, w).permute(1, 0, 2, 3)
-
-        # renorm flows
-        min_float = torch.nextafter(torch.zeros((1,), dtype=flows.dtype),
-                                    torch.ones((1,)))
-        flows = flows / (min_float + (flows**2).sum(dim=1, keepdims=True)**0.5)
 
         transforms['affine'] = affine_transform
 
@@ -139,10 +123,10 @@ def random_transform(
         labels = nn.functional.pad(labels, padding, value=0)
         if overlap_mask is not None:
             overlap_mask = nn.functional.pad(overlap_mask, padding, value=0)
-        flows = nn.ReplicationPad2d(padding)(flows)
+
+        flows = flows.pad(padding)
 
         assert len(image.shape) == 2
-        assert len(flows.shape) == 4, flows.shape
 
         assert all(
             s >= patch_size for s in image.shape), "oops messed up the padding"
@@ -164,15 +148,16 @@ def random_transform(
     labels = v2.functional.crop(labels, i, j, h, w)
     if overlap_mask is not None:
         overlap_mask = v2.functional.crop(overlap_mask, i, j, h, w)
-    flows = v2.functional.crop(flows, i, j, h, w)
+
+    flows = flows.crop(i, j, h, w)
 
     if flip_h and (torch.rand(1) > 0.5):
+        # TODO There is an issue there (or the other flip)
         image = v2.functional.hflip(image)
         labels = v2.functional.hflip(labels)
         if overlap_mask is not None:
             overlap_mask = v2.functional.hflip(overlap_mask)
-        flows = v2.functional.hflip(flows)
-        flows[:, 1] = -flows[:, 1]
+        flows = flows.flip(mode='h', shape=image.shape)
         transforms['flip_h'] = True
     else:
         transforms['flip_h'] = False
@@ -182,8 +167,7 @@ def random_transform(
         labels = v2.functional.vflip(labels)
         if overlap_mask is not None:
             overlap_mask = v2.functional.vflip(overlap_mask)
-        flows = v2.functional.vflip(flows)
-        flows[:, 0] = -flows[:, 0]
+        flows = flows.flip(mode='v', shape=image.shape)
         transforms['flip_v'] = True
     else:
         transforms['flip_v'] = False
@@ -194,16 +178,10 @@ def random_transform(
         labels = torch.rot90(labels, k=k, dims=(0, 1))
         if overlap_mask is not None:
             overlap_mask = torch.rot90(overlap_mask, k=k, dims=(0, 1))
-        flows = torch.rot90(flows, k=k, dims=(-2, -1))
-        theta = k*np.pi/2
-        rot_matrix = torch.tensor([[np.cos(theta), -np.sin(theta)],
-                                   [np.sin(theta), np.cos(theta)]]).float()
-
-        n, _, h, w = flows.shape
-        flows_flat = flows.permute(1, 0, 2, 3).reshape(2, -1)
-        flows_flat_rot = torch.matmul(rot_matrix, flows_flat)
-        flows = flows_flat_rot.reshape(2, n, h, w).permute(1, 0, 2, 3)
-        assert flows.shape == (n, 2, h, w)
+        h, w = image.shape
+        flows = flows.affine_transform(
+            angle=k*90, center=(h/2, w/2)
+        )
         transforms['rot'] = k
 
     if relabel:
@@ -211,25 +189,15 @@ def random_transform(
         current_labels = torch.unique(labels, sorted=True).cpu().numpy()
         current_labels = natsorted(list(set(current_labels) - set([0])))
 
-        new_flows = torch.zeros(
-            (len(current_labels), 2) + labels.shape, dtype=flows.dtype)
         new_labels = torch.zeros_like(labels)
 
         for i, l in enumerate(current_labels):
             new_l = i+1
-            try:
-                new_labels[labels == l] = new_l
-                flows_l = flows[l-1]
-                # flows[l-1] corresponds to flows for label l
-                new_flows[new_l-1] = flows_l
-                labels_new_to_old[new_l] = l
-            except Exception as e:
-                print(
-                    f"failed to process old label {l} into label {new_l}\n{new_labels.shape=}\n{new_flows.shape=}\n{flows.shape=}\n{current_labels=}")
-                raise e
+            new_labels[labels == l] = new_l
+            labels_new_to_old[new_l] = l
 
         labels = new_labels
-        flows = new_flows
+        flows.relabel(labels_new_to_old)
 
         transforms['labels_new_to_old'] = labels_new_to_old
     else:
@@ -247,7 +215,6 @@ class FlowDataset(Dataset):
             augmentation_params: AugmentationParams,
             recompute_flows: bool,
             center_method: str,
-            alpha_heat: float = 0.95,
             cuda_flow_compute: bool = True,
             closure_radius: int | None = None,
             bootstrap_factor: int = 1,
@@ -255,8 +222,8 @@ class FlowDataset(Dataset):
             return_overlap_map: bool = False,
             keep_data_in_memory: bool = False,
             image_normalization: ImageNormalization = 'M1P1',
+            gridflow_n_interpol: int = 21
     ):
-        self.alpha_heat = alpha_heat
         self.aug_params = augmentation_params
         self.closure_radius = closure_radius
         self.bootstrap_factor = bootstrap_factor
@@ -266,6 +233,7 @@ class FlowDataset(Dataset):
         self.return_overlap_map = return_overlap_map
         self.keep_data_in_memory = keep_data_in_memory
         self.image_normalization = image_normalization
+        self.gridflow_n_interpol = gridflow_n_interpol
 
         self.name = f"{os.path.split(data_dir)[-1]}-{subset}"
 
@@ -286,21 +254,36 @@ class FlowDataset(Dataset):
                 self.masks_onehot_files), (self.images_files, self.masks_onehot_files)
 
         self.flow_files = []
-        desc = f"[{self.name}] " + ("recomputing" if recompute_flows else "checking/computing") + \
-            f" flows for {subset} data"
-        for index, filename in enumerate(tqdm(self.images_files, desc=desc)):
-            m = re.match(r'(.*)\_img\.(tif|png)', filename)
-            assert m is not None, f"image file {filename} does not match pattern .*_img.tif"
-            image_name = m.group(1)
-            flow_file = f"{image_name}_flows_alpha{alpha_heat}_{center_method}_c{default(closure_radius, 0)}.tif"
-            flow_file_path = os.path.join(self.directory, flow_file)
-            compute_flow = ((not os.path.exists(flow_file_path))
-                            and (not self.lazy_flow_computing))
-            compute_flow = compute_flow or recompute_flows
-            if compute_flow:
-                self.compute_flow(flow_file_path, index,
-                                  center_method, cuda_flow_compute)
-            self.flow_files.append(flow_file)
+        desc = f"[{self.name}] " + f"checking flows for {subset} data"
+        with concurrent.futures.ProcessPoolExecutor() as executor:
+            to_compute = []
+            for index, filename in enumerate(tqdm(self.images_files, desc=desc)):
+                m = re.match(r'(.*)\_img\.(tif|png)', filename)
+                assert m is not None, f"image file {filename} does not match pattern .*_img.tif"
+                image_name = m.group(1)
+                flow_file = f"{image_name}_flows_{center_method}_c{default(closure_radius, 0)}.npz"
+                flow_file_path = os.path.join(self.directory, flow_file)
+                compute_flow = ((not os.path.exists(flow_file_path))
+                                and (not self.lazy_flow_computing))
+                compute_flow = compute_flow or recompute_flows
+                if compute_flow:
+                    to_compute.append(
+                        executor.submit(
+                            self.compute_flow,
+                            flow_file_path=flow_file_path,
+                            image_index=index,
+                            center_method=center_method,
+                            cuda_flow_compute=cuda_flow_compute
+                        )
+                    )
+                self.flow_files.append(flow_file)
+            if len(to_compute) > 0:
+                desc = f"[{self.name}] Computing flows for {subset} data"
+                pbar = tqdm(total=len(to_compute), desc=desc)
+                for _ in concurrent.futures.as_completed(to_compute):
+                    pbar.update(1)
+            else:
+                print(f"[{self.name}] no flows to (re)compute {subset} data")
 
         self.n_images = len(self.images_files)
 
@@ -344,18 +327,18 @@ class FlowDataset(Dataset):
         center_method: str,
         cuda_flow_compute: bool
     ):
-        device = None if cuda_flow_compute else torch.device('cpu')
 
         labels_one_hot = imread(os.path.join(
             self.directory, self.masks_onehot_files[image_index]))
-        flows, _, _ = extented_diffusion(
-            masks_onehot=labels_one_hot,
-            alpha_out=self.alpha_heat,
-            center_method=center_method,
-            device=device
+
+        gf = GridFlow.from_one_hot(
+            labels_one_hot=labels_one_hot,
+            n_interpol=1,
+            flow_center_method=center_method,
+            flow_compute_device=torch.device(
+                'cuda' if cuda_flow_compute else 'cpu')
         )
-        write_flows_stack(flows, flow_file_path)
-        del flows, labels_one_hot
+        gf.to_file(flow_file_path)
 
     def __len__(self):
         return self.n_images * self.bootstrap_factor
@@ -392,13 +375,15 @@ class FlowDataset(Dataset):
             else:
                 assert os.path.exists(flow_file_path)
 
-            flows = imread(flow_file_path)
-            assert len(flows.shape) == 4
-            data['flows'] = torch.tensor(flows, dtype=torch.float)
+            gridflow = GridFlow.from_file(
+                flow_file_path, n_interpol=self.gridflow_n_interpol
+            )
+            data['flows'] = gridflow
 
             # sanity check
-            assert np.max(
-                labels) == flows.shape[0], f"got max label {np.max(labels)} and {flows.shape[0]} flow slices"
+            if np.max(labels) != np.max(gridflow.get_label_keys()):
+                raise ValueError(
+                    f"got max label {np.max(labels)} and {np.max(gridflow.get_label_keys())} flow slices")
 
             if self.return_overlap_map:
                 labels_oh = imread(os.path.join(self.directory,
@@ -433,12 +418,12 @@ class FlowDataset(Dataset):
             **self.aug_params.__dict__
         )
 
-        nb_instances = int(flows.shape[0])
+        # nb_instances = int(flows.shape[0])
         ret = {
             'image': image.unsqueeze(dim=0).float(),
             'labels': labels,
             'flows': flows,
-            'nb_instances': nb_instances,
+            # 'nb_instances': nb_instances, #TODO remove
             'source': self.images_files[index],
             'transforms': transforms
         }
@@ -477,8 +462,7 @@ def flow_data_collate_fn(batch):
         clone = copy.copy(elem)
         for key in elem:
             if key == 'flows':
-                clone[key] = collate_tensor_pad_to_size(
-                    [d[key] for d in batch])
+                clone[key] = [d[key] for d in batch]
             elif key == 'transforms':
                 clone[key] = [d[key] for d in batch]
             else:
@@ -515,7 +499,6 @@ class FlowDataModule(lightning.LightningDataModule):
             num_workers: int,
             augmentation_params: AugmentationParams,
             validation: bool = False,
-            alpha_heat=0.95,
             recompute_flows: bool = False,
             closure_radius: int | None = 8,
             cuda_flow_compute: bool = True,
@@ -542,7 +525,6 @@ class FlowDataModule(lightning.LightningDataModule):
         self.validation = validation
 
         self.dataset_params_train = dict(
-            alpha_heat=alpha_heat,
             augmentation_params=augmentation_params,
             recompute_flows=recompute_flows,
             closure_radius=closure_radius,
@@ -555,7 +537,6 @@ class FlowDataModule(lightning.LightningDataModule):
             image_normalization=image_normalization
         )
         self.dataset_params_val = dict(
-            alpha_heat=alpha_heat,
             augmentation_params=AugmentationParams(
                 patch_size=default(
                     val_patch_size, augmentation_params.patch_size),
@@ -607,7 +588,7 @@ class FlowDataModule(lightning.LightningDataModule):
                 self.val_data,
                 batch_size=self.val_batch_size,
                 num_workers=self.num_workers,
-                collate_fn=flow_data_collate_fn,
+                # collate_fn=flow_data_collate_fn,#TODO REmove ?
                 shuffle=False,
                 prefetch_factor=self.prefetch_factor
             )

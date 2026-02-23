@@ -74,7 +74,6 @@ data:
     rotate: false
     scale_range: null
     rot90: false
-  alpha_heat: 0.95
   recompute_flows: false
   closure_radius: 8
   cuda_flow_compute: true
