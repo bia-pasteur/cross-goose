@@ -173,10 +173,19 @@ class GridFlow:
 
     def query(self, x: np.ndarray, label: int) -> np.ndarray:
 
+        if label not in self.points.keys():
+            raise KeyError(
+                f"label {label} not in Gridflow with labels {self.points.keys()}")
+
         distance, nearest_vertex = self.points[label].query(
             x, k=self.n_interpol)
 
-        vec = self.flows[label][nearest_vertex]
+        try:
+            vec = self.flows[label][nearest_vertex]
+        except IndexError as e:
+            print(
+                f"failed to fetch {nearest_vertex=}, in flows {self.flows[label].shape=}")
+            raise e
 
         if self.n_interpol > 1:
             # agglomerate results if interpolating
@@ -212,7 +221,7 @@ class GridFlow:
         transform_matrix = get_affine_transform_matrix(
             translation=translate,
             center=np.array(center),
-            rot=angle,
+            rot=-angle,
             scale=scale
         )
 
@@ -235,11 +244,27 @@ class GridFlow:
             n_interpol=self.n_interpol
         )
 
-    def crop(self, top: int, left: int, height: int, width: int) -> Self:
+    def crop(self, top: int, left: int, height: int, width: int, drop_oob: bool = False) -> Self:
         offset = np.array([[-top, -left]])
+        new_points = {}
+        new_flows = {}
+        shape_arr = np.array([height, width])
+        zeros_arr = np.array([height, width])
+        for k in self.points.keys():
+            pts = offset + self.points[k].data
+            keep = True
+            if drop_oob:
+                max_bound = np.max(pts, axis=0)
+                min_bound = np.min(pts, axis=0)
+                if np.all(max_bound > shape_arr) or np.all(min_bound < zeros_arr):
+                    keep = False  # the shape is oob
+            if keep:
+                new_points[k] = pts
+                new_flows[k] = self.flows[k]
+
         return GridFlow(
-            points={k: offset + v.data for k, v in self.points.items()},
-            flows=self.flows,
+            points=new_points,
+            flows=new_flows,
             n_interpol=self.n_interpol
         )
 
@@ -267,7 +292,7 @@ class GridFlow:
 
     def relabel(self, mapping: Dict[int, int]):
         self.points = {new_key: self.points[old_key]
-                       for old_key, new_key in mapping.items()}
+                       for new_key, old_key in mapping.items()}
         self.flows = {new_key: self.flows[old_key]
                       for new_key, old_key in mapping.items()}
 
@@ -301,7 +326,7 @@ def get_affine_transform_matrix(translation, center, rot, scale):
     matrix[5] += matrix[3] * (-cx) + matrix[4] * (-cy)
     matrix[2] += cx + tx
     matrix[5] += cy + ty
-    return np.array(matrix).reshape(3, 3)
+    return np.array(matrix).reshape(2, 3)
 
 
 def get_rotation_matrix(angle: float, degree: bool = False) -> np.ndarray:
@@ -312,8 +337,8 @@ def get_rotation_matrix(angle: float, degree: bool = False) -> np.ndarray:
 
 
 def _transform_points(x: np.ndarray, transform_matrix: np.ndarray) -> np.ndarray:
-    x = np.matmul(transform_matrix, np.stack(
-        [x, np.ones(x.shape[0])], axis=0).T).T
+    x = np.matmul(transform_matrix, np.concat(
+        [x, np.ones((x.shape[0], 1))], axis=1).T).T
     return x[:, :2]
 
 

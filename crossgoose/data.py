@@ -1,3 +1,4 @@
+import concurrent
 import copy
 import os
 import re
@@ -5,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Literal, Tuple
 
-import concurrent
 import lightning
 import numpy as np
 import tifffile
@@ -79,6 +79,8 @@ def random_transform(
             'translate': (0, 0),
             'shear': (0, 0)
         }
+        h, w = image.shape
+        center = (h/2, w/2)
         image = v2.functional.affine(
             image.unsqueeze(dim=0),
             **affine_transform,
@@ -98,10 +100,10 @@ def random_transform(
                 interpolation=InterpolationMode.NEAREST,
                 fill=0
             )[0].long()
-        h, w = image.shape
+
         flows = flows.affine_transform(
             **affine_transform,
-            center=(h/w, w/2)
+            center=center
         )
 
         transforms['affine'] = affine_transform
@@ -152,7 +154,6 @@ def random_transform(
     flows = flows.crop(i, j, h, w)
 
     if flip_h and (torch.rand(1) > 0.5):
-        # TODO There is an issue there (or the other flip)
         image = v2.functional.hflip(image)
         labels = v2.functional.hflip(labels)
         if overlap_mask is not None:
@@ -180,7 +181,7 @@ def random_transform(
             overlap_mask = torch.rot90(overlap_mask, k=k, dims=(0, 1))
         h, w = image.shape
         flows = flows.affine_transform(
-            angle=k*90, center=(h/2, w/2)
+            angle=-k*90, center=(h/2, w/2)
         )
         transforms['rot'] = k
 
