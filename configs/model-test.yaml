@@ -78,7 +78,7 @@ data:
   closure_radius: 8
   cuda_flow_compute: true
   center_method: graph_center_weighted
-  bootstrap_factor: 8
+  bootstrap_factor: 1
   prefetch_factor: 2
   lazy_flow_computing: false
   return_overlap_map: false

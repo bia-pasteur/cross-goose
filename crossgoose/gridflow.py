@@ -190,6 +190,36 @@ class GridFlow:
 
         return vec
 
+    def query_multiple_labels_threaded(self, pos: np.ndarray, labels: np.ndarray) -> np.ndarray:
+        assert len(pos.shape) == 2
+        assert pos.shape[-1] == 2
+        assert pos.shape[0] == labels.shape[0]
+
+        n_x = pos.shape[0]
+
+        unique_labels = np.unique(labels)
+        vec = np.empty((n_x, 2))
+        masks = []
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            to_compute = []
+            for l in unique_labels:
+                mask = labels == l
+                masks.append(mask)
+                to_compute.append(
+                    executor.submit(
+                        self.query,
+                        pos=pos[mask],
+                        label=l
+                    )
+                )
+            for f in concurrent.futures.as_completed(to_compute):
+                f: concurrent.futures.Future
+                i = to_compute.index(f)
+                mask = masks[i]
+                vec[mask, :] = f.result()
+
+        return vec
+
     def query(self, pos: np.ndarray, label: int) -> np.ndarray:
         assert pos.shape[-1] == 2
         if label not in self.points.keys():
@@ -399,7 +429,7 @@ class BatchGridFlow:
                 masks.append(mask)
                 to_compute.append(
                     executor.submit(
-                        self.gridflows[b].query_multiple_labels,
+                        self.gridflows[b].query_multiple_labels_threaded,
                         pos=pos[mask, :],
                         labels=labels[mask]
                     )
@@ -407,7 +437,6 @@ class BatchGridFlow:
             for f in concurrent.futures.as_completed(to_compute):
                 f: concurrent.futures.Future
                 i = to_compute.index(f)
-                b = unique_batch_indices[i]
                 mask = masks[i]
                 vec[mask, :] = f.result()
         return vec
