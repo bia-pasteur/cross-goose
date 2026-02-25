@@ -216,7 +216,6 @@ class FlowDataset(Dataset):
             augmentation_params: AugmentationParams,
             recompute_flows: bool,
             center_method: str,
-            cuda_flow_compute: bool = True,
             closure_radius: int | None = None,
             bootstrap_factor: int = 1,
             lazy_flow_computing: bool = False,
@@ -230,7 +229,6 @@ class FlowDataset(Dataset):
         self.bootstrap_factor = bootstrap_factor
         self.lazy_flow_computing = lazy_flow_computing
         self.center_method = center_method
-        self.cuda_flow_compute = cuda_flow_compute
         self.return_overlap_map = return_overlap_map
         self.keep_data_in_memory = keep_data_in_memory
         self.image_normalization = image_normalization
@@ -273,8 +271,7 @@ class FlowDataset(Dataset):
                             self.compute_flow,
                             flow_file_path=flow_file_path,
                             image_index=index,
-                            center_method=center_method,
-                            cuda_flow_compute=cuda_flow_compute
+                            center_method=center_method
                         )
                     )
                 self.flow_files.append(flow_file)
@@ -325,19 +322,16 @@ class FlowDataset(Dataset):
         self,
         flow_file_path: str,
         image_index: int,
-        center_method: str,
-        cuda_flow_compute: bool
+        center_method: str
     ):
-
+        
         labels_one_hot = imread(os.path.join(
             self.directory, self.masks_onehot_files[image_index]))
-
         gf = GridFlow.from_one_hot(
             labels_one_hot=labels_one_hot,
             n_interpol=1,
             flow_center_method=center_method,
-            flow_compute_device=torch.device(
-                'cuda' if cuda_flow_compute else 'cpu')
+            flow_compute_device=torch.device('cpu')
         )
         gf.to_file(flow_file_path)
 
@@ -371,10 +365,10 @@ class FlowDataset(Dataset):
                 print(
                     f"[{self.name}] i'm lazy (or the file is missing), i'm just now computing the flow for image {index}, hold on a sec...")
                 self.compute_flow(flow_file_path, index,
-                                  self.center_method,
-                                  self.cuda_flow_compute)
+                                  self.center_method)
             else:
-                assert os.path.exists(flow_file_path)
+                if not os.path.exists(flow_file_path):
+                    raise FileNotFoundError(flow_file_path)
 
             gridflow = GridFlow.from_file(
                 flow_file_path, n_interpol=self.gridflow_n_interpol
@@ -501,7 +495,6 @@ class FlowDataModule(lightning.LightningDataModule):
             validation: bool = False,
             recompute_flows: bool = False,
             closure_radius: int | None = 8,
-            cuda_flow_compute: bool = True,
             center_method: str = 'dist',
             bootstrap_factor: int = 1,
             prefetch_factor: int = 2,
@@ -529,7 +522,6 @@ class FlowDataModule(lightning.LightningDataModule):
             augmentation_params=augmentation_params,
             recompute_flows=recompute_flows,
             closure_radius=closure_radius,
-            cuda_flow_compute=cuda_flow_compute,
             center_method=center_method,
             bootstrap_factor=bootstrap_factor,
             lazy_flow_computing=lazy_flow_computing,
@@ -552,7 +544,6 @@ class FlowDataModule(lightning.LightningDataModule):
             bootstrap_factor=1,
             recompute_flows=recompute_flows,
             closure_radius=closure_radius,
-            cuda_flow_compute=cuda_flow_compute,
             center_method=center_method,
             lazy_flow_computing=lazy_flow_computing,
             return_overlap_map=return_overlap_map,

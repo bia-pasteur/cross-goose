@@ -96,6 +96,9 @@ class GridFlow:
         self.points = {k: KDTree(v) for k, v in points.items()}
         self.flows = flows
 
+    def __str__(self):
+        return f"GridFlow with {len(self.points)} labels"
+
     @classmethod
     def from_one_hot(
         self,
