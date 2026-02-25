@@ -72,7 +72,7 @@ data:
     flip_h: true
     flip_v: true
     rotate: true
-    scale_range: [0.5,1.5]
+    scale_range: [0.8,1.2]
     rot90: false
   recompute_flows: false
   closure_radius: 8

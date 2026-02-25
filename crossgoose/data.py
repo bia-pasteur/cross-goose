@@ -424,7 +424,6 @@ class FlowDataset(Dataset):
             'image': image.unsqueeze(dim=0).float(),
             'labels': labels,
             'flows': flows,
-            # 'nb_instances': nb_instances, #TODO remove
             'source': self.images_files[index],
             'transforms': transforms
         }
@@ -589,7 +588,7 @@ class FlowDataModule(lightning.LightningDataModule):
                 self.val_data,
                 batch_size=self.val_batch_size,
                 num_workers=self.num_workers,
-                # collate_fn=flow_data_collate_fn,#TODO REmove ?
+                collate_fn=flow_data_collate_fn,
                 shuffle=False,
                 prefetch_factor=self.prefetch_factor
             )
