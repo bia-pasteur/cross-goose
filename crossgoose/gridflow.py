@@ -171,14 +171,33 @@ class GridFlow:
             n_interpol=n_interpol
         )
 
-    def query(self, x: np.ndarray, label: int) -> np.ndarray:
+    def query_multiple_labels(self, pos: np.ndarray, labels: np.ndarray) -> np.ndarray:
+        assert len(pos.shape) == 2
+        assert pos.shape[-1] == 2
+        assert pos.shape[0] == labels.shape[0]
 
+        n_x = pos.shape[0]
+
+        unique_labels = np.unique(labels)
+        vec = np.empty((n_x, 2))
+        for l in unique_labels:
+            mask = labels == l
+            vec_l = self.query(
+                pos=pos[mask],
+                label=l
+            )
+            vec[mask, :] = vec_l
+
+        return vec
+
+    def query(self, pos: np.ndarray, label: int) -> np.ndarray:
+        assert pos.shape[-1] == 2
         if label not in self.points.keys():
             raise KeyError(
                 f"label {label} not in Gridflow with labels {self.points.keys()}")
 
         distance, nearest_vertex = self.points[label].query(
-            x, k=self.n_interpol)
+            pos, k=self.n_interpol)
 
         try:
             vec = self.flows[label][nearest_vertex]
@@ -200,7 +219,7 @@ class GridFlow:
     def query_flow_grid(self, label: int, shape: Tuple[int, int]) -> np.ndarray:
         h, w = shape
         pts = np.reshape(np.mgrid[:h, :w], (2, -1)).transpose()
-        flow = self.query(x=pts, label=label).transpose().reshape((2, h, w))
+        flow = self.query(pos=pts, label=label).transpose().reshape((2, h, w))
         return flow
 
     def get_label_keys(self) -> List[int]:
@@ -349,3 +368,35 @@ def _transform_flows(x: np.ndarray, angle: float) -> np.ndarray:
         x = np.matmul(rot_matrix, x.transpose()).transpose()
 
     return x
+
+
+class BatchGridFlow:
+    def __init__(
+        self,
+        gridflows: List[GridFlow]
+    ):
+        self.gridflows: List[GridFlow] = gridflows
+
+    def __getitem__(self, key) -> GridFlow:
+        return self.gridflows[key]
+
+    def batch_query_multiple_labels(
+        self,
+        pos: np.ndarray,
+        batch_indices: np.ndarray,
+        labels: np.ndarray,
+    ) -> np.ndarray:
+        assert pos.shape[0] == batch_indices.shape[0]
+        assert pos.shape[0] == labels.shape[0]
+        n_pts = pos.shape[0]
+        unique_batch_indices = np.unique(batch_indices.astype(int))
+        vec = np.empty((n_pts, 2))
+
+        for b in unique_batch_indices:
+            mask = batch_indices == b
+            vec_b = self.gridflows[b].query_multiple_labels(
+                pos=pos[mask, :],
+                labels=labels[mask]
+            )
+            vec[mask, :] = vec_b
+        return vec

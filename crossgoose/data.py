@@ -17,7 +17,7 @@ from torchvision.transforms import InterpolationMode, v2
 from tqdm import tqdm
 
 from crossgoose.cellpose.transforms import get_pad_yx, normalize99
-from crossgoose.gridflow import GridFlow
+from crossgoose.gridflow import BatchGridFlow, GridFlow
 from crossgoose.mask_utils import convert_labels_to_onehot
 from crossgoose.utils import default, imread, remap
 
@@ -462,7 +462,7 @@ def flow_data_collate_fn(batch):
         clone = copy.copy(elem)
         for key in elem:
             if key == 'flows':
-                clone[key] = [d[key] for d in batch]
+                clone[key] = BatchGridFlow([d[key] for d in batch])
             elif key == 'transforms':
                 clone[key] = [d[key] for d in batch]
             else:

@@ -1,18 +1,20 @@
 name: crossgoose2
 channels:
   - conda-forge
-  - pytorch
 dependencies:
   - edt
   - fastremap
   - imageio
   - ipykernel
+  - jsonargparse
   - lightning
   - matplotlib
   - natsort
   - numba
   - numpy
+  - opencv
   - pandas
+  - pip
   - pylint
   - python=3.12
   - pytorch
@@ -22,7 +24,6 @@ dependencies:
   - tensorboard
   - tifffile=2025
   - torchvision
-  - opencv
-  - jsonargparse[signatures]
   - pip:
-    - fill_voids
+      - fill_voids==2.1.1
+      - jsonargparse==4.46.0
