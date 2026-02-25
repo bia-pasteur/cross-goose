@@ -10,7 +10,7 @@ trainer:
     class_path: lightning.pytorch.loggers.TensorBoardLogger
     init_args:
       save_dir: model_logs
-      name: model_d02
+      name: model_v1.1_d02
   callbacks:
   - class_path: lightning.pytorch.callbacks.ModelCheckpoint
     init_args:
@@ -71,8 +71,8 @@ data:
     patch_size: 256
     flip_h: true
     flip_v: true
-    rotate: true
-    scale_range: [0.8,1.2]
+    rotate: false
+    scale_range: null
     rot90: false
   recompute_flows: false
   closure_radius: 8
@@ -86,6 +86,7 @@ data:
   val_batch_size: 2
   val_patch_size: 512
   image_normalization: M1P1
+  gridflow_n_interpol: 11
 optimizer:
   class_path: torch.optim.AdamW
   init_args:
