@@ -391,12 +391,23 @@ class BatchGridFlow:
         n_pts = pos.shape[0]
         unique_batch_indices = np.unique(batch_indices.astype(int))
         vec = np.empty((n_pts, 2))
-
-        for b in unique_batch_indices:
-            mask = batch_indices == b
-            vec_b = self.gridflows[b].query_multiple_labels(
-                pos=pos[mask, :],
-                labels=labels[mask]
-            )
-            vec[mask, :] = vec_b
+        masks = []
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            to_compute = []
+            for b in unique_batch_indices:
+                mask = batch_indices == b
+                masks.append(mask)
+                to_compute.append(
+                    executor.submit(
+                        self.gridflows[b].query_multiple_labels,
+                        pos=pos[mask, :],
+                        labels=labels[mask]
+                    )
+                )
+            for f in concurrent.futures.as_completed(to_compute):
+                f: concurrent.futures.Future
+                i = to_compute.index(f)
+                b = unique_batch_indices[i]
+                mask = masks[i]
+                vec[mask, :] = f.result()
         return vec

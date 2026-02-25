@@ -472,14 +472,12 @@ class CrossGooseModel(lightning.LightningModule):
                 torch.tile(e0, (self.n_samples, 1)),
                 et
             )
-            tstart = time.perf_counter()
+
             flow_gt = self._sample_gtflows_batch(
                 flow_grid_gt=flow_grid_gt,
                 l0=l0_samples_flat,
                 ut=ut_samples_flat
             )
-            tend = time.perf_counter()
-            print(f"_sample_gtflows_batch in {tend-tstart:.2f}s")
 
             loss_steps = self.criterion_flow(flow_est, self.flow_fac * flow_gt)
 

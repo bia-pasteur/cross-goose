@@ -510,7 +510,8 @@ class FlowDataModule(lightning.LightningDataModule):
             keep_data_in_memory: bool = True,
             val_batch_size: int | None = None,
             val_patch_size: int | None = None,
-            image_normalization: ImageNormalization = 'M1P1'
+            image_normalization: ImageNormalization = 'M1P1',
+            gridflow_n_interpol: int = 21
     ):
         super().__init__()
         data_dir = os.path.join(data_root, dataset)
@@ -534,7 +535,8 @@ class FlowDataModule(lightning.LightningDataModule):
             lazy_flow_computing=lazy_flow_computing,
             return_overlap_map=return_overlap_map,
             keep_data_in_memory=keep_data_in_memory,
-            image_normalization=image_normalization
+            image_normalization=image_normalization,
+            gridflow_n_interpol=gridflow_n_interpol
         )
         self.dataset_params_val = dict(
             augmentation_params=AugmentationParams(
@@ -556,6 +558,7 @@ class FlowDataModule(lightning.LightningDataModule):
             return_overlap_map=return_overlap_map,
             keep_data_in_memory=keep_data_in_memory,
             image_normalization=image_normalization,
+            gridflow_n_interpol=gridflow_n_interpol
         )
 
     def setup(self, stage):

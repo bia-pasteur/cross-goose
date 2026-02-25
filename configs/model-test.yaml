@@ -86,6 +86,7 @@ data:
   val_batch_size: 2
   val_patch_size: 512
   image_normalization: M1P1
+  gridflow_n_interpol: 11
 optimizer:
   class_path: torch.optim.AdamW
   init_args:
