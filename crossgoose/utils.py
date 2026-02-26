@@ -4,6 +4,7 @@ import os
 import random
 import time
 from contextlib import contextmanager
+from typing import Literal
 
 import imageio
 import matplotlib
@@ -11,6 +12,10 @@ import numpy as np
 import tifffile
 import torch
 from matplotlib.colors import ListedColormap
+
+from crossgoose.cellpose.transforms import normalize99
+
+ImageNormalization = Literal['M1P1', 'N99']
 
 
 def remap(arr: np.array, min_out: float, max_out: float, axis=None):
@@ -131,3 +136,12 @@ def normalize_vec(vec: np.ndarray, axis: int | None = None) -> np.ndarray:
     else:
         vec = np.where(norm > 0.0, vec/norm, vec)
     return vec
+
+
+def normalize_image(image: np.ndarray, image_normalization: ImageNormalization) -> np.ndarray:
+    if image_normalization == 'M1P1':
+        return remap(image, -1, 1)
+    elif image_normalization == 'N99':
+        return normalize99(image)
+    else:
+        raise ValueError
