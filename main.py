@@ -1,7 +1,7 @@
 
 import jsonargparse
 
-from crossgoose.data_utils import make_dataset, make_synth_dataset
+from crossgoose.data.data_utils import make_dataset, make_synth_dataset
 from crossgoose.eval import eval_models
 
 

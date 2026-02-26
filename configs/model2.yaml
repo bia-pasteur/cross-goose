@@ -45,7 +45,7 @@ trainer:
   enable_progress_bar: true
 model:
   flow_fn:
-    class_path: crossgoose.models.FlowLinear
+    class_path: crossgoose.model.flow_function.FlowLinear
     init_args:
       embedding_dim: 8
       hidden_dims:

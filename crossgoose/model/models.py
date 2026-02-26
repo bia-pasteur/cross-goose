@@ -5,9 +5,8 @@ import os
 import pathlib
 import re
 import time
-from abc import ABC, abstractmethod
 from enum import Enum
-from typing import List, Literal
+from typing import Literal
 
 import lightning
 import numpy as np
@@ -16,148 +15,18 @@ import yaml
 from lightning.pytorch.cli import LightningArgumentParser
 from torch import nn
 
-from crossgoose.cellpose import models as cp_models
 from crossgoose.cellpose.dynamics import get_masks_torch
 from crossgoose.cellpose.metrics import average_precision
 from crossgoose.cellpose.resnet_torch import batchconv
 from crossgoose.cellpose.transforms import get_pad_yx
-from crossgoose.data import FlowDataModule
 from crossgoose.gridflow import BatchGridFlow
+from crossgoose.model.flow_function import FlowFunction
+from crossgoose.model.modules import CPBackbone
 
 
 class SamplingMethod(Enum):
     FOLLOW_FLOWS = "follow_flows"
     RANDOM_ON_CELL = "random_on_cell"
-
-
-class CPBackbone(nn.Module):
-    def __init__(self, device, load_pretrained: bool = True):
-        super().__init__()
-        self.device = device
-
-        self.nchan = 2
-        nclasses = 3
-        self.nbase = [32, 64, 128, 256]
-        self.nbase = [self.nchan, *self.nbase]
-        diam_mean = 30
-
-        net = cp_models.CPnet(
-            nbase=self.nbase, nout=nclasses, sz=3, mkldnn=False,
-            max_pool=True, diam_mean=diam_mean).to(self.device)
-
-        if load_pretrained:
-            pretrained_model, diam_mean, _, _ = cp_models.get_model_params(
-                pretrained_model='cyto3',
-                model_type=None,
-                pretrained_model_ortho=None,
-                default_model='cyto3')
-
-            net.load_model(pretrained_model, device=self.device)
-
-        self.downsample = net.downsample
-        self.make_style = net.make_style
-        self.upsample = net.upsample
-        # self.output = net.output
-
-    def forward(self, data):
-
-        c = data.shape[1]
-        if c != self.nchan:
-            raise ValueError(
-                f"data.shape[1]={c} does not mach n_chan={self.nchan}")
-
-        # the cellpose way
-        T0 = self.downsample(data)
-
-        style = self.make_style(T0[-1])
-
-        T1 = self.upsample(style, T0, False)
-        # T1 is of feature size 32
-        # T2 = self.output(T1)
-
-        return T1, style, T0
-
-
-def linblock(in_channels, out_channels):
-    return nn.Sequential(
-        nn.ReLU(),
-        nn.Linear(in_channels, out_channels),
-    )
-
-
-class FlowFunction(ABC, nn.Module):
-
-    @abstractmethod
-    def forward(self, e0, et):
-        raise NotImplementedError
-
-
-class FlowAttention(FlowFunction):
-    def __init__(
-        self,
-        embedding_dim: int,
-        key_dim: int,
-        nb_key: int,
-        value_dim: int = 2
-    ):
-        super().__init__()
-        self.key_dim = key_dim
-        self.value_dim = value_dim
-        self.nb_key = nb_key
-        self.embedding_dim = embedding_dim
-
-        self.query_module = linblock(embedding_dim, key_dim)
-        self.key_module = linblock(embedding_dim, nb_key*key_dim)
-        self.value_module = linblock(embedding_dim, nb_key*value_dim)
-
-    def forward(self, e0, et):
-
-        n, f = e0.shape
-        assert tuple(et.shape) == (n, f), (et.shape, (n, f))
-
-        query = self.query_module(e0).view(n, 1, self.key_dim)
-        key = self.key_module(et).view(n, self.nb_key, self.key_dim)
-        value = self.value_module(et).view(n, self.nb_key, self.value_dim)
-
-        # https://docs.pytorch.org/docs/2.4/generated/torch.nn.functional.scaled_dot_product_attention.html
-        return nn.functional.scaled_dot_product_attention(  # pylint: disable=E1102
-            query=query,
-            key=key,
-            value=value
-        ).squeeze(dim=-2)
-
-
-class FlowLinear(FlowFunction):
-    def __init__(
-        self,
-        embedding_dim: int,
-        hidden_dims: List[int],
-        value_dim: int = 2,
-    ):
-        super().__init__()
-        self.embedding_dim = embedding_dim
-
-        all_dims = hidden_dims + [value_dim]
-        modules = []
-        last_dim = embedding_dim*2
-        for dim in all_dims:
-            modules.append(
-                linblock(
-                    in_channels=last_dim,
-                    out_channels=dim
-                ))
-            last_dim = dim
-
-        self.transform = nn.Sequential(
-            *modules
-        )
-
-    def forward(self, e0, et):
-        n, f = e0.shape
-        assert tuple(et.shape) == (n, f)
-        e0et = torch.concat([e0, et], dim=1)
-
-        return self.transform(e0et)
 
 
 Ckptcriterion = Literal['last', 'best_ap_0.5', 'best_ap_0.75', 'best_ap_0.9']
