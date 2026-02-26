@@ -119,7 +119,7 @@ def timer(label: str | None = None):
         logging.info(msg)
 
 
-def normalize_vec(vec: np.ndarray, axis: int | None = None) -> np.ndarray:
+def normalize_vec(vec: np.ndarray, axis: int | None = None, eps: float = 1e-9) -> np.ndarray:
     """Normalize vector along axis
 
     Args:
@@ -134,7 +134,7 @@ def normalize_vec(vec: np.ndarray, axis: int | None = None) -> np.ndarray:
         if norm > 0.0:
             vec = vec / norm
     else:
-        vec = np.where(norm > 0.0, vec/norm, vec)
+        vec = np.where(norm > eps, vec/np.clip(norm, eps, np.inf), 0)
     return vec
 
 
