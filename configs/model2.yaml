@@ -56,10 +56,6 @@ model:
   crit_flow_weight: 0.1
   crit_cellprob_weight: 2.0
   n_steps: 200
-  n_samples: 100
-  sampling_method: RANDOM_ON_CELL
-  random_on_cell_sigma: 4.0
-  overlap_focus_multiplier: 1.0
   backbone_realease_delay: null
 data:
   data_root: data
@@ -74,6 +70,11 @@ data:
     rotate: false
     scale_range: null
     rot90: false
+  points_sampler:
+    class_path: crossgoose.data.points_sampling.RandomOnCell
+    init_args:
+      n_samples: 100
+      sigma: 4.0
   recompute_flows: false
   closure_radius: 8
   center_method: graph_center_weighted

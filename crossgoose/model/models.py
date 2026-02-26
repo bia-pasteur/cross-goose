@@ -40,19 +40,11 @@ class CrossGooseModel(lightning.LightningModule):
         crit_flow_weight: float = 0.1,
         crit_cellprob_weight: float = 2.0,
         n_steps: int = 200,
-        n_samples: int = 50,
-        sampling_method: SamplingMethod = SamplingMethod.FOLLOW_FLOWS,
-        random_on_cell_sigma: float = 4.0,
-        overlap_focus_multiplier: float = 1.0,
         backbone_realease_delay: int | None = None
     ):
         super().__init__()
         self.n_steps = n_steps
-        self.n_samples = n_samples
         self.embeddings_dim = embeddings_dim
-        self.sampling_method = sampling_method
-        self.random_on_cell_sigma = random_on_cell_sigma
-        self.overlap_focus_multiplier = overlap_focus_multiplier
         self.backbone_realease_delay = backbone_realease_delay
 
         self.backbone = CPBackbone(device=self.device)
@@ -230,52 +222,6 @@ class CrossGooseModel(lightning.LightningModule):
         gathered_emb = raster[idx0, :, idx1, idx2]
         return gathered_emb
 
-    def _sample_uts(
-        self,
-        image: torch.Tensor,
-        labels: torch.Tensor,
-        u0: torch.Tensor,
-        l0: torch.Tensor
-    ):
-        if self.sampling_method == SamplingMethod.FOLLOW_FLOWS:
-            _, log_ut, _ = self.follow_flow(
-                image, n_steps=self.n_steps, as_numpy=False, u0=u0
-            )
-            step_samples = np.linspace(
-                0, self.n_steps, self.n_samples, dtype=int)
-            ut_samples = log_ut[step_samples]
-        elif self.sampling_method == SamplingMethod.RANDOM_ON_CELL:
-            batch_size, _, h, w = image.shape
-            min_bound = torch.tensor([0, 0], device=u0.device)
-            max_bound = torch.tensor([h, w], device=u0.device)-1
-            ut_samples = torch.zeros(
-                (self.n_samples,)+u0.shape, dtype=torch.float, device=u0.device)
-            ut_samples[:, :, 0] = u0[:, 0]
-            for b in range(batch_size):
-                batch_pt_mask = u0[:, 0] == b
-                unique_labels = torch.unique(l0[batch_pt_mask])
-                for l in unique_labels:
-                    labels_pt_mask = (l0 == l) & batch_pt_mask
-                    label_pts = torch.nonzero(labels[b] == l)
-                    n = int(torch.sum(labels_pt_mask))
-                    m = label_pts.shape[0]
-
-                    samples_idx = torch.randint(
-                        0, m, size=(self.n_samples, n))
-                    samples = label_pts[samples_idx].float()
-
-                    pert = self.random_on_cell_sigma * \
-                        torch.randn_like(samples)
-                    samples = torch.clamp(
-                        samples + pert,
-                        min=min_bound, max=max_bound
-                    )
-                    ut_samples[:, labels_pt_mask, 1:] = samples
-        else:
-            raise ValueError(self.sampling_method)
-
-        return ut_samples
-
     def _sample_gtflows_batch(self, flow_grid_gt: BatchGridFlow, l0: torch.Tensor, ut: torch.Tensor):
 
         flows = flow_grid_gt.batch_query_multiple_labels(
@@ -288,21 +234,11 @@ class CrossGooseModel(lightning.LightningModule):
     def training_step(self, batch, batch_idx):
 
         labels: torch.Tensor = batch['labels']
-        flow_grid_gt: BatchGridFlow = batch['flows']
         image: torch.Tensor = torch.tile(batch['image'], (1, 2, 1, 1))
 
         batch_size = image.shape[0]
 
         loss_dict = {'loss': 0.0}
-
-        u0 = torch.nonzero(labels)
-        l0 = labels[u0[:, 0], u0[:, 1], u0[:, 2]]
-        u0 = u0.float()
-
-        # sample points
-        ut_samples = self._sample_uts(
-            image=image, u0=u0, labels=labels, l0=l0
-        )
 
         features = self.image_to_maps(image, apply_sigmoids=False)
         emb_grid_0 = features['emb_grid_0']
@@ -316,39 +252,15 @@ class CrossGooseModel(lightning.LightningModule):
         loss_dict['loss'] += loss_dict['loss_cp']
 
         # get u0
+        u0 = batch['u0']
+        ut = batch['ut']
         e0 = self._gather_emb_batch(emb_grid_0, u0)
+        et = self._gather_emb_batch(emb_grid_t, ut)
 
-        LEGACY_LOOP = False
-        # Legacy loop
-        if LEGACY_LOOP:
-            loss_steps = 0
-            for i in range(self.n_samples):
-                ut = ut_samples[i].detach()
-                et = self._gather_emb_batch(emb_grid_t, ut)
-                flow_est = self.flow_fn(e0, et)
-                flow_gt = self._sample_gtflows_batch(
-                    flow_grid_gt=flow_grid_gt,
-                    l0=l0,
-                    ut=ut
-                )
-                loss_i = self.criterion_flow(flow_est, self.flow_fac * flow_gt)
-                loss_steps = loss_steps + loss_i / self.n_samples
-        else:
-            l0_samples_flat = torch.tile(l0, (self.n_samples,))
-            ut_samples_flat = ut_samples.view((-1, 3))
-            et = self._gather_emb_batch(emb_grid_t, ut_samples_flat)
-            flow_est = self.flow_fn(
-                torch.tile(e0, (self.n_samples, 1)),
-                et
-            )
+        flow_est = self.flow_fn(e0, et)
+        flow_gt = batch['flow_u0_ut']
 
-            flow_gt = self._sample_gtflows_batch(
-                flow_grid_gt=flow_grid_gt,
-                l0=l0_samples_flat,
-                ut=ut_samples_flat
-            )
-
-            loss_steps = self.criterion_flow(flow_est, self.flow_fac * flow_gt)
+        loss_steps = self.criterion_flow(flow_est, self.flow_fac * flow_gt)
 
         loss_dict['loss_steps'] = loss_steps
         loss_dict['loss'] += loss_dict['loss_steps']
