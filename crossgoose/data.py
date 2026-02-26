@@ -278,7 +278,8 @@ class FlowDataset(Dataset):
             if len(to_compute) > 0:
                 desc = f"[{self.name}] Computing flows for {subset} data"
                 pbar = tqdm(total=len(to_compute), desc=desc)
-                for _ in concurrent.futures.as_completed(to_compute):
+                for f in concurrent.futures.as_completed(to_compute):
+                    _ = f.result()
                     pbar.update(1)
             else:
                 print(f"[{self.name}] no flows to (re)compute {subset} data")
@@ -323,17 +324,18 @@ class FlowDataset(Dataset):
         flow_file_path: str,
         image_index: int,
         center_method: str
-    ):
-        
+    ) -> str:
+
         labels_one_hot = imread(os.path.join(
             self.directory, self.masks_onehot_files[image_index]))
         gf = GridFlow.from_one_hot(
             labels_one_hot=labels_one_hot,
             n_interpol=1,
-            flow_center_method=center_method,
-            flow_compute_device=torch.device('cpu')
+            flow_center_method=center_method
         )
         gf.to_file(flow_file_path)
+
+        return flow_file_path
 
     def __len__(self):
         return self.n_images * self.bootstrap_factor

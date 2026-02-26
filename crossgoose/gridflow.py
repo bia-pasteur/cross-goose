@@ -8,14 +8,39 @@ from typing import Dict, List, Literal, Self, Tuple
 
 import numpy as np
 import skimage
-import torch
 from scipy.interpolate import interpn
 from scipy.ndimage import find_objects
 from scipy.spatial import KDTree
 
-from crossgoose.dynamics import cp_masks_to_flows_gpu
-from crossgoose.mask_utils import CenterMethod
+from crossgoose.cellpose.dynamics import _extend_centers
+from crossgoose.mask_utils import CENTER_METHODS, CenterMethod
 from crossgoose.utils import normalize_vec
+
+
+def _single_mask_to_flow(
+    mask: np.ndarray,
+    center_method: CenterMethod,
+    n_iter: int | None = None,
+):
+    assert np.max(mask) < 2  # we just do one instance
+    ly, lx = mask.shape
+    y, x = np.nonzero(mask)
+    y = y.astype(np.int32)  # is this necessary ?
+    x = x.astype(np.int32)
+
+    c_fun = CENTER_METHODS[center_method]
+    ymed, xmed = c_fun(mask > 0)
+
+    n_iter = 2 * np.int32(ly + lx) if n_iter is None else n_iter
+    T = np.zeros((ly) * (lx), np.float64)
+    T = _extend_centers(T, y, x, ymed, xmed, np.int32(lx), np.int32(n_iter))
+    dy = T[(y + 1) * lx + x] - T[(y - 1) * lx + x]
+    dx = T[y * lx + x + 1] - T[y * lx + x - 1]
+    mu = np.zeros((2, ly, lx), np.float64)
+    mu[:, y, x] = np.stack((dy, dx))
+    mu /= (1e-60 + (mu**2).sum(axis=0)**0.5)
+
+    return mu
 
 
 def _mask_to_pts_and_flw(
@@ -23,9 +48,7 @@ def _mask_to_pts_and_flw(
     flow_center_method: CenterMethod,
     inside_sub_sampling: int,
     contour_sub_sampling: int,
-    contour_method: Literal['marching_squares',
-                            'dilation'],
-    flow_compute_device: torch.device
+    contour_method: Literal['marching_squares', 'dilation']
 ):
     mask_size = np.sum(mask)
     assert mask_size > 0
@@ -41,9 +64,9 @@ def _mask_to_pts_and_flw(
     mask_local = np.pad(mask[slice_k], pad_width=padding)
     mask_local_dil = skimage.morphology.isotropic_dilation(
         mask_local, radius=1)
-    flow_local, _ = cp_masks_to_flows_gpu(
-        mask_local_dil.astype(int),
-        device=flow_compute_device,
+
+    flow_local = _single_mask_to_flow(
+        mask=mask_local_dil,
         center_method=flow_center_method
     )
 
@@ -109,10 +132,7 @@ class GridFlow:
         contour_sub_sampling: int = 2,
         contour_method: Literal['marching_squares',
                                 'dilation'] = 'marching_squares',
-        flow_compute_device: torch.device = None
     ) -> Self:
-        if not flow_compute_device:
-            flow_compute_device = torch.device('cpu')
 
         n_labels = labels_one_hot.shape[0]
         points: Dict[str, KDTree] = {}
@@ -126,8 +146,7 @@ class GridFlow:
                 flow_center_method=flow_center_method,
                 inside_sub_sampling=inside_sub_sampling,
                 contour_sub_sampling=contour_sub_sampling,
-                contour_method=contour_method,
-                flow_compute_device=flow_compute_device
+                contour_method=contour_method
             )
 
             points[k+1] = pts
