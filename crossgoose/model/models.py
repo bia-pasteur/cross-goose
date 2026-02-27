@@ -96,7 +96,7 @@ class CrossGooseModel(lightning.LightningModule):
             return CrossGooseModel._load_model_from_dir(model, ckpt_crit=ckpt_crit)
         else:
             models_dir = pathlib.Path(
-                __file__).parent.resolve().joinpath('models')
+                __file__).parent.resolve().joinpath('../models')
             if not os.path.exists(models_dir):
                 raise FileNotFoundError(
                     f"could not find models dir at {str(models_dir)}")
