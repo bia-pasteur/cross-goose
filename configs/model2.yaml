@@ -60,8 +60,8 @@ model:
 data:
   data_root: data
   dataset: Dataset_v02
-  batch_size: 4
-  num_workers: 12
+  batch_size: 8
+  num_workers: 24
   validation: true
   augmentation_params:
     patch_size: 256
@@ -79,7 +79,7 @@ data:
   closure_radius: 8
   center_method: graph_center_weighted
   bootstrap_factor: 8
-  prefetch_factor: 2
+  prefetch_factor: 4
   lazy_flow_computing: false
   return_overlap_map: false
   keep_data_in_memory: true
