@@ -10,7 +10,7 @@ trainer:
     class_path: lightning.pytorch.loggers.TensorBoardLogger
     init_args:
       save_dir: model_logs
-      name: model_test
+      name: model_v1.2.1_sharedemb_d02
   callbacks:
   - class_path: lightning.pytorch.callbacks.ModelCheckpoint
     init_args:
@@ -52,7 +52,7 @@ model:
       - 16
       - 8
       value_dim: 2
-  embeddings_dim: 8
+  embeddings_dim: 16
   crit_flow_weight: 0.1
   crit_cellprob_weight: 2.0
   n_steps: 200
@@ -61,8 +61,8 @@ model:
 data:
   data_root: data
   dataset: Dataset_v02
-  batch_size: 4
-  num_workers: 12
+  batch_size: 8
+  num_workers: 24
   validation: true
   augmentation_params:
     patch_size: 256
@@ -79,8 +79,8 @@ data:
   recompute_flows: false
   closure_radius: 8
   center_method: graph_center_weighted
-  bootstrap_factor: 1
-  prefetch_factor: 2
+  bootstrap_factor: 8
+  prefetch_factor: 4
   lazy_flow_computing: false
   return_overlap_map: false
   keep_data_in_memory: true
