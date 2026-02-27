@@ -23,6 +23,9 @@ from crossgoose.gridflow import BatchGridFlow
 from crossgoose.model.flow_function import FlowFunction
 from crossgoose.model.modules import CPBackbone
 
+SAVED_MODELS_DIR = pathlib.Path(
+    __file__).parent.resolve().joinpath('../saved_models')
+
 
 class SamplingMethod(Enum):
     FOLLOW_FLOWS = "follow_flows"
@@ -95,18 +98,16 @@ class CrossGooseModel(lightning.LightningModule):
         if os.path.isdir(model):
             return CrossGooseModel._load_model_from_dir(model, ckpt_crit=ckpt_crit)
         else:
-            models_dir = pathlib.Path(
-                __file__).parent.resolve().joinpath('../models')
-            if not os.path.exists(models_dir):
+            if not os.path.exists(SAVED_MODELS_DIR):
                 raise FileNotFoundError(
-                    f"could not find models dir at {str(models_dir)}")
-            available_models = os.listdir(models_dir)
+                    f"could not find models dir at {str(SAVED_MODELS_DIR)} or {model} is not a dir")
+            available_models = os.listdir(SAVED_MODELS_DIR)
             if not model in available_models:
                 raise FileNotFoundError(
                     f"no model {model} in exisitng models {available_models}")
 
-            ckpt_path = os.path.join(models_dir, model, 'weights.ckpt')
-            config_path = os.path.join(models_dir, model, 'config.yaml')
+            ckpt_path = os.path.join(SAVED_MODELS_DIR, model, 'weights.ckpt')
+            config_path = os.path.join(SAVED_MODELS_DIR, model, 'config.yaml')
             return CrossGooseModel._load_from_ckpt(
                 ckpt_path=ckpt_path,
                 config_path=config_path
