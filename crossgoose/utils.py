@@ -1,6 +1,10 @@
 import datetime
+import logging
 import os
 import random
+import time
+from contextlib import contextmanager
+from typing import Literal
 
 import imageio
 import matplotlib
@@ -8,6 +12,10 @@ import numpy as np
 import tifffile
 import torch
 from matplotlib.colors import ListedColormap
+
+from crossgoose.cellpose.transforms import normalize99
+
+ImageNormalization = Literal['M1P1', 'N99']
 
 
 def remap(arr: np.array, min_out: float, max_out: float, axis=None):
@@ -92,3 +100,48 @@ def get_labels_cmap(base_cmap: str = 'RdYlGn'):
 
 def random_adjective():
     return random.choice(list(open('crossgoose/misc/english-adjectives.txt', encoding='utf-8')))[:-1]
+
+
+@contextmanager
+def timer(label: str | None = None):
+    """
+    Usage
+    -----
+    with timer('my heavy step'):
+        do_something()
+    """
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed = time.perf_counter() - start
+        msg = f"{label}: {elapsed:.6f}s" if label else f"elapsed: {elapsed:.6f}s"
+        logging.info(msg)
+
+
+def normalize_vec(vec: np.ndarray, axis: int | None = None, eps: float = 1e-9) -> np.ndarray:
+    """Normalize vector along axis
+
+    Args:
+        vec (np.ndarray): vector to normalize
+        axis (int | None, optional): axis to normalize on. Defaults to None.
+
+    Returns:
+        np.ndarray: normalized vector on axis
+    """
+    norm = np.linalg.norm(vec, axis=axis, keepdims=True)
+    if axis is None:
+        if norm > 0.0:
+            vec = vec / norm
+    else:
+        vec = np.where(norm > eps, vec/np.clip(norm, eps, np.inf), 0)
+    return vec
+
+
+def normalize_image(image: np.ndarray, image_normalization: ImageNormalization) -> np.ndarray:
+    if image_normalization == 'M1P1':
+        return remap(image, -1, 1)
+    elif image_normalization == 'N99':
+        return normalize99(image)
+    else:
+        raise ValueError

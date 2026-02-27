@@ -1,0 +1,2 @@
+config_file: 'configs/model-test.yaml'
+n_tests: 100

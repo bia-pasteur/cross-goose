@@ -10,7 +10,7 @@ import numpy as np
 import tifffile
 from tqdm import tqdm
 
-from crossgoose.data_synthetic import make_synth_data
+from crossgoose.data.data_synthetic import make_synth_data
 
 
 def make_dataset(

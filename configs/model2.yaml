@@ -10,7 +10,7 @@ trainer:
     class_path: lightning.pytorch.loggers.TensorBoardLogger
     init_args:
       save_dir: model_logs
-      name: model_d02
+      name: model_v1.1.1_d02
   callbacks:
   - class_path: lightning.pytorch.callbacks.ModelCheckpoint
     init_args:
@@ -56,16 +56,12 @@ model:
   crit_flow_weight: 0.1
   crit_cellprob_weight: 2.0
   n_steps: 200
-  n_samples: 100
-  sampling_method: RANDOM_ON_CELL
-  random_on_cell_sigma: 4.0
-  overlap_focus_multiplier: 1.0
   backbone_realease_delay: null
 data:
   data_root: data
   dataset: Dataset_v02
-  batch_size: 4
-  num_workers: 12
+  batch_size: 8
+  num_workers: 24
   validation: true
   augmentation_params:
     patch_size: 256
@@ -74,18 +70,23 @@ data:
     rotate: false
     scale_range: null
     rot90: false
+  points_sampler:
+    class_path: crossgoose.data.points_sampling.RandomOnCell
+    init_args:
+      n_samples: 100
+      sigma: 4.0
   recompute_flows: false
   closure_radius: 8
-  cuda_flow_compute: true
   center_method: graph_center_weighted
   bootstrap_factor: 8
-  prefetch_factor: 2
+  prefetch_factor: 4
   lazy_flow_computing: false
   return_overlap_map: false
   keep_data_in_memory: true
   val_batch_size: 2
   val_patch_size: 512
   image_normalization: M1P1
+  gridflow_n_interpol: 11
 optimizer:
   class_path: torch.optim.AdamW
   init_args:

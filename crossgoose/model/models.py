@@ -5,9 +5,8 @@ import os
 import pathlib
 import re
 import time
-from abc import ABC, abstractmethod
 from enum import Enum
-from typing import List, Literal
+from typing import Literal
 
 import lightning
 import numpy as np
@@ -16,147 +15,21 @@ import yaml
 from lightning.pytorch.cli import LightningArgumentParser
 from torch import nn
 
-from crossgoose.cellpose import models as cp_models
 from crossgoose.cellpose.dynamics import get_masks_torch
 from crossgoose.cellpose.metrics import average_precision
 from crossgoose.cellpose.resnet_torch import batchconv
 from crossgoose.cellpose.transforms import get_pad_yx
-from crossgoose.data import FlowDataModule
+from crossgoose.gridflow import BatchGridFlow
+from crossgoose.model.flow_function import FlowFunction
+from crossgoose.model.modules import CPBackbone
+
+SAVED_MODELS_DIR = pathlib.Path(
+    __file__).parent.resolve().joinpath('../saved_models')
 
 
 class SamplingMethod(Enum):
     FOLLOW_FLOWS = "follow_flows"
     RANDOM_ON_CELL = "random_on_cell"
-
-
-class CPBackbone(nn.Module):
-    def __init__(self, device, load_pretrained: bool = True):
-        super().__init__()
-        self.device = device
-
-        self.nchan = 2
-        nclasses = 3
-        self.nbase = [32, 64, 128, 256]
-        self.nbase = [self.nchan, *self.nbase]
-        diam_mean = 30
-
-        net = cp_models.CPnet(
-            nbase=self.nbase, nout=nclasses, sz=3, mkldnn=False,
-            max_pool=True, diam_mean=diam_mean).to(self.device)
-
-        if load_pretrained:
-            pretrained_model, diam_mean, _, _ = cp_models.get_model_params(
-                pretrained_model='cyto3',
-                model_type=None,
-                pretrained_model_ortho=None,
-                default_model='cyto3')
-
-            net.load_model(pretrained_model, device=self.device)
-
-        self.downsample = net.downsample
-        self.make_style = net.make_style
-        self.upsample = net.upsample
-        # self.output = net.output
-
-    def forward(self, data):
-
-        c = data.shape[1]
-        if c != self.nchan:
-            raise ValueError(
-                f"data.shape[1]={c} does not mach n_chan={self.nchan}")
-
-        # the cellpose way
-        T0 = self.downsample(data)
-
-        style = self.make_style(T0[-1])
-
-        T1 = self.upsample(style, T0, False)
-        # T1 is of feature size 32
-        # T2 = self.output(T1)
-
-        return T1, style, T0
-
-
-def linblock(in_channels, out_channels):
-    return nn.Sequential(
-        nn.ReLU(),
-        nn.Linear(in_channels, out_channels),
-    )
-
-
-class FlowFunction(ABC, nn.Module):
-
-    @abstractmethod
-    def forward(self, e0, et):
-        raise NotImplementedError
-
-
-class FlowAttention(FlowFunction):
-    def __init__(
-        self,
-        embedding_dim: int,
-        key_dim: int,
-        nb_key: int,
-        value_dim: int = 2
-    ):
-        super().__init__()
-        self.key_dim = key_dim
-        self.value_dim = value_dim
-        self.nb_key = nb_key
-        self.embedding_dim = embedding_dim
-
-        self.query_module = linblock(embedding_dim, key_dim)
-        self.key_module = linblock(embedding_dim, nb_key*key_dim)
-        self.value_module = linblock(embedding_dim, nb_key*value_dim)
-
-    def forward(self, e0, et):
-
-        n, f = e0.shape
-        assert tuple(et.shape) == (n, f), (et.shape, (n, f))
-
-        query = self.query_module(e0).view(n, 1, self.key_dim)
-        key = self.key_module(et).view(n, self.nb_key, self.key_dim)
-        value = self.value_module(et).view(n, self.nb_key, self.value_dim)
-
-        # https://docs.pytorch.org/docs/2.4/generated/torch.nn.functional.scaled_dot_product_attention.html
-        return nn.functional.scaled_dot_product_attention(  # pylint: disable=E1102
-            query=query,
-            key=key,
-            value=value
-        ).squeeze(dim=-2)
-
-
-class FlowLinear(FlowFunction):
-    def __init__(
-        self,
-        embedding_dim: int,
-        hidden_dims: List[int],
-        value_dim: int = 2,
-    ):
-        super().__init__()
-        self.embedding_dim = embedding_dim
-
-        all_dims = hidden_dims + [value_dim]
-        modules = []
-        last_dim = embedding_dim*2
-        for dim in all_dims:
-            modules.append(
-                linblock(
-                    in_channels=last_dim,
-                    out_channels=dim
-                ))
-            last_dim = dim
-
-        self.transform = nn.Sequential(
-            *modules
-        )
-
-    def forward(self, e0, et):
-        n, f = e0.shape
-        assert tuple(et.shape) == (n, f)
-        e0et = torch.concat([e0, et], dim=1)
-
-        return self.transform(e0et)
 
 
 Ckptcriterion = Literal['last', 'best_ap_0.5', 'best_ap_0.75', 'best_ap_0.9']
@@ -170,19 +43,11 @@ class CrossGooseModel(lightning.LightningModule):
         crit_flow_weight: float = 0.1,
         crit_cellprob_weight: float = 2.0,
         n_steps: int = 200,
-        n_samples: int = 50,
-        sampling_method: SamplingMethod = SamplingMethod.FOLLOW_FLOWS,
-        random_on_cell_sigma: float = 4.0,
-        overlap_focus_multiplier: float = 1.0,
         backbone_realease_delay: int | None = None
     ):
         super().__init__()
         self.n_steps = n_steps
-        self.n_samples = n_samples
         self.embeddings_dim = embeddings_dim
-        self.sampling_method = sampling_method
-        self.random_on_cell_sigma = random_on_cell_sigma
-        self.overlap_focus_multiplier = overlap_focus_multiplier
         self.backbone_realease_delay = backbone_realease_delay
 
         self.backbone = CPBackbone(device=self.device)
@@ -233,18 +98,16 @@ class CrossGooseModel(lightning.LightningModule):
         if os.path.isdir(model):
             return CrossGooseModel._load_model_from_dir(model, ckpt_crit=ckpt_crit)
         else:
-            models_dir = pathlib.Path(
-                __file__).parent.resolve().joinpath('models')
-            if not os.path.exists(models_dir):
+            if not os.path.exists(SAVED_MODELS_DIR):
                 raise FileNotFoundError(
-                    f"could not find models dir at {str(models_dir)}")
-            available_models = os.listdir(models_dir)
+                    f"could not find models dir at {str(SAVED_MODELS_DIR)} or {model} is not a dir")
+            available_models = os.listdir(SAVED_MODELS_DIR)
             if not model in available_models:
                 raise FileNotFoundError(
                     f"no model {model} in exisitng models {available_models}")
 
-            ckpt_path = os.path.join(models_dir, model, 'weights.ckpt')
-            config_path = os.path.join(models_dir, model, 'config.yaml')
+            ckpt_path = os.path.join(SAVED_MODELS_DIR, model, 'weights.ckpt')
+            config_path = os.path.join(SAVED_MODELS_DIR, model, 'config.yaml')
             return CrossGooseModel._load_from_ckpt(
                 ckpt_path=ckpt_path,
                 config_path=config_path
@@ -360,89 +223,23 @@ class CrossGooseModel(lightning.LightningModule):
         gathered_emb = raster[idx0, :, idx1, idx2]
         return gathered_emb
 
-    def _sample_uts(
-        self,
-        image: torch.Tensor,
-        labels: torch.Tensor,
-        u0: torch.Tensor,
-        l0: torch.Tensor
-    ):
-        if self.sampling_method == SamplingMethod.FOLLOW_FLOWS:
-            _, log_ut, _ = self.follow_flow(
-                image, n_steps=self.n_steps, as_numpy=False, u0=u0
-            )
-            step_samples = np.linspace(
-                0, self.n_steps, self.n_samples, dtype=int)
-            sample_weights = [
-                1 / self.n_samples for _ in range(self.n_samples)]
-            ut_samples = log_ut[step_samples]
-        elif self.sampling_method == SamplingMethod.RANDOM_ON_CELL:
-            batch_size, _, h, w = image.shape
-            min_bound = torch.tensor([0, 0], device=u0.device)
-            max_bound = torch.tensor([h, w], device=u0.device)-1
-            ut_samples = torch.zeros(
-                (self.n_samples,)+u0.shape, dtype=torch.float, device=u0.device)
-            ut_samples[:, :, 0] = u0[:, 0]
-            for b in range(batch_size):
-                batch_pt_mask = u0[:, 0] == b
-                unique_labels = torch.unique(l0[batch_pt_mask])
-                for l in unique_labels:
-                    labels_pt_mask = (l0 == l) & batch_pt_mask
-                    label_pts = torch.nonzero(labels[b] == l)
-                    n = int(torch.sum(labels_pt_mask))
-                    m = label_pts.shape[0]
+    def _sample_gtflows_batch(self, flow_grid_gt: BatchGridFlow, l0: torch.Tensor, ut: torch.Tensor):
 
-                    samples_idx = torch.randint(
-                        0, m, size=(self.n_samples, n))
-                    samples = label_pts[samples_idx].float()
-
-                    pert = self.random_on_cell_sigma * \
-                        torch.randn_like(samples)
-                    samples = torch.clamp(
-                        samples + pert,
-                        min=min_bound, max=max_bound
-                    )
-                    ut_samples[:, labels_pt_mask, 1:] = samples
-            sample_weights = [
-                1 / self.n_samples for _ in range(self.n_samples)
-            ]
-        else:
-            raise ValueError(self.sampling_method)
-
-        return ut_samples, sample_weights
-
-    def _sample_gtflows_batch(self, gt_flows: torch.Tensor, l0: torch.Tensor, ut: torch.Tensor):
-        # gt flows are a tensor of shape B,N_max,2,H,W
-        # N_max the max nb of instances accross the batch
-        # flow for label l is gt_flows[:,l-1]
-
-        # index on source/current batch (u0[:,0] should be same as ut[:,0])
-        idx0 = ut[:, 0].long()
-        idx1 = (l0-1).long()  # check flow for source label
-        idx2 = ut[:, 1].long()  # check flows at current position
-        idx3 = ut[:, 2].long()  # same
-
-        flows = gt_flows[idx0, idx1, :, idx2, idx3]
-        return flows
+        flows = flow_grid_gt.batch_query_multiple_labels(
+            pos=ut[..., 1:].detach().cpu().numpy(),
+            labels=l0.detach().cpu().numpy(),
+            batch_indices=ut[..., 0].detach().cpu().numpy()
+        )
+        return torch.from_numpy(flows).to(ut.device).float()
 
     def training_step(self, batch, batch_idx):
 
         labels: torch.Tensor = batch['labels']
-        flow_raster_gt: torch.Tensor = batch['flows']
         image: torch.Tensor = torch.tile(batch['image'], (1, 2, 1, 1))
 
-        batch_size = flow_raster_gt.shape[0]
+        batch_size = image.shape[0]
 
         loss_dict = {'loss': 0.0}
-
-        u0 = torch.nonzero(labels)
-        l0 = labels[u0[:, 0], u0[:, 1], u0[:, 2]]
-        u0 = u0.float()
-
-        # sample points
-        ut_samples, sample_weights = self._sample_uts(
-            image=image, u0=u0, labels=labels, l0=l0
-        )
 
         features = self.image_to_maps(image, apply_sigmoids=False)
         emb_grid_0 = features['emb_grid_0']
@@ -456,20 +253,15 @@ class CrossGooseModel(lightning.LightningModule):
         loss_dict['loss'] += loss_dict['loss_cp']
 
         # get u0
+        u0 = batch['u0']
+        ut = batch['ut']
         e0 = self._gather_emb_batch(emb_grid_0, u0)
+        et = self._gather_emb_batch(emb_grid_t, ut)
 
-        loss_steps = 0
-        for i in range(self.n_samples):
-            ut = ut_samples[i].detach()
-            et = self._gather_emb_batch(emb_grid_t, ut)
-            flow_est = self.flow_fn(e0, et)
-            flow_gt = self._sample_gtflows_batch(
-                gt_flows=flow_raster_gt,
-                l0=l0,
-                ut=ut
-            )
-            loss_i = self.criterion_flow(flow_est, self.flow_fac * flow_gt)
-            loss_steps = loss_steps + loss_i * sample_weights[i]
+        flow_est = self.flow_fn(e0, et)
+        flow_gt = batch['flow_u0_ut']
+
+        loss_steps = self.criterion_flow(flow_est, self.flow_fac * flow_gt)
 
         loss_dict['loss_steps'] = loss_steps
         loss_dict['loss'] += loss_dict['loss_steps']

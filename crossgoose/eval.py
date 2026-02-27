@@ -15,10 +15,10 @@ from tqdm import tqdm
 
 from crossgoose.cellpose.metrics import (aggregated_jaccard_index,
                                          average_precision)
-from crossgoose.data import ImageNormalization, normalize_image
+from crossgoose.utils import ImageNormalization
 from crossgoose.mask_utils import SaveFormat, save_masks
-from crossgoose.models import Ckptcriterion, CrossGooseModel
-from crossgoose.utils import append_to_dict_items, imread
+from crossgoose.model.models import Ckptcriterion, CrossGooseModel
+from crossgoose.utils import append_to_dict_items, imread, normalize_image
 
 
 def _eval_model(

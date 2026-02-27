@@ -67,10 +67,11 @@ def show_flow_lines(
     ax.plot(log_pts[:, :, 1], log_pts[:, :, 0], color='white',
             alpha=0.65, zorder=1, linewidth=0.4)
 
+
 def get_custom_mask_cmap():
     base_cmap = mpl.colormaps['RdYlGn'].resampled(256)
     newcolors = base_cmap(np.linspace(0, 1, 256))
     # newcolors = base_cmap((np.linspace(0, 1, 256)%(1/8))*8)
     # newcolors = base_cmap(rng.random(256))
-    newcolors[0, :] = [0,0,0,1]
+    newcolors[0, :] = [0, 0, 0, 1]
     return ListedColormap(newcolors)

@@ -3,8 +3,8 @@ import lightning
 import torch
 from lightning.pytorch.cli import LightningCLI,LightningArgumentParser
 
-from crossgoose.data import FlowDataModule
-from crossgoose.models import CrossGooseModel
+from crossgoose.data.dataset import FlowDataModule
+from crossgoose.model.models import CrossGooseModel
 from crossgoose.utils import get_timestamp, random_adjective
 
 
