@@ -18,11 +18,14 @@ from crossgoose.cellpose.transforms import normalize99
 ImageNormalization = Literal['M1P1', 'N99']
 
 
-def remap(arr: np.array, min_out: float, max_out: float, axis=None):
-    vmin = np.min(arr, axis=axis, keepdims=True)
-    vmax = np.max(arr, axis=axis, keepdims=True)
+def remap(arr: np.array, min_out: float, max_out: float,
+          min_in: float = None, max_in: float = None, axis=None):
+    if min_in is None:
+        min_in = np.min(arr, axis=axis, keepdims=True)
+    if max_in is None:
+        max_in = np.max(arr, axis=axis, keepdims=True)
 
-    return ((arr - vmin) / (vmax - vmin)) * (max_out-min_out) + min_out
+    return ((arr - min_in) / (max_in - min_in)) * (max_out-min_out) + min_out
 
 
 def remap_torch(arr: torch.Tensor, min_out: float, max_out: float, dim=None):
