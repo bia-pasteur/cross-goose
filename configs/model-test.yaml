@@ -60,6 +60,7 @@ model:
   backbone_realease_delay: null
   shared_embedding: false
   train_on_trajectories: true
+  time_error_weighting: true
 data:
   data_root: data
   dataset: Dataset_v02

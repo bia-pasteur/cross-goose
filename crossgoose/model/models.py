@@ -45,7 +45,8 @@ class CrossGooseModel(lightning.LightningModule):
         n_steps: int = 200,
         backbone_realease_delay: int | None = None,
         shared_embedding: bool = False,
-        train_on_trajectories: bool = False
+        train_on_trajectories: bool = False,
+        time_error_weighting: bool = False
     ):
         super().__init__()
         self.n_steps = n_steps
@@ -53,6 +54,7 @@ class CrossGooseModel(lightning.LightningModule):
         self.backbone_realease_delay = backbone_realease_delay
         self.shared_embedding = shared_embedding
         self.train_on_trajectories = train_on_trajectories
+        self.time_error_weighting = time_error_weighting
 
         self.backbone = CPBackbone(device=self.device)
         self.backbone_out = self.backbone.nbase[1]
@@ -70,7 +72,8 @@ class CrossGooseModel(lightning.LightningModule):
             sz=1
         )
 
-        self.criterion_flow = nn.MSELoss(reduction="mean")
+        self.criterion_flow = nn.MSELoss(
+            reduction="mean" if not self.train_on_trajectories else 'none')
         self.criterion_cellprob = nn.BCEWithLogitsLoss(reduction="mean")
 
         self.flow_fac = 5.
@@ -281,7 +284,7 @@ class CrossGooseModel(lightning.LightningModule):
             u0 = torch.concat([pts_batch, pts_coord[:, 0]], axis=-1)
             e0 = self._gather_emb_batch(emb_grid_0, u0)
 
-            _, n_steps, _ = pts_coord.shape
+            n_samples, n_steps, _ = pts_coord.shape
 
             pts_batch = torch.tile(pts_batch[..., None], (1, n_steps, 1))
             ut = torch.concat([pts_batch, pts_coord], axis=-1)
@@ -293,8 +296,16 @@ class CrossGooseModel(lightning.LightningModule):
 
             flow_est = self.flow_fn(e0, et)
 
-            loss_steps = self.criterion_flow(
-                flow_est, self.flow_fac * pts_flows)
+            error = torch.mean(self.criterion_flow(
+                flow_est, self.flow_fac * pts_flows), dim=-1)  # reduce on spatial dim
+
+            if self.time_error_weighting:
+                error_per_timeframe = torch.sum(error, dim=1, keepdim=True)
+                error_per_timeframe = error_per_timeframe / \
+                    torch.sum(error_per_timeframe)  # normalize
+                loss_steps = torch.sum(error * error_per_timeframe) / n_samples
+            else:
+                loss_steps = torch.mean(error)
 
         else:
             # v1.0 behaviour
