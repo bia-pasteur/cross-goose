@@ -43,19 +43,24 @@ class CrossGooseModel(lightning.LightningModule):
         crit_flow_weight: float = 0.1,
         crit_cellprob_weight: float = 2.0,
         n_steps: int = 200,
-        backbone_realease_delay: int | None = None
+        backbone_realease_delay: int | None = None,
+        shared_embedding: bool = False
     ):
         super().__init__()
         self.n_steps = n_steps
         self.embeddings_dim = embeddings_dim
         self.backbone_realease_delay = backbone_realease_delay
+        self.shared_embedding = shared_embedding
 
         self.backbone = CPBackbone(device=self.device)
         self.backbone_out = self.backbone.nbase[1]
 
         self.flow_fn = flow_fn
 
-        out_c = (2*self.embeddings_dim) + 1
+        if self.shared_embedding:
+            out_c = self.embeddings_dim + 1
+        else:
+            out_c = (2*self.embeddings_dim) + 1
 
         self.embedding_head = batchconv(
             in_channels=self.backbone_out,
@@ -187,7 +192,11 @@ class CrossGooseModel(lightning.LightningModule):
         res = {'T1': T1}
 
         res['emb_grid_0'] = T1[:, :self.embeddings_dim]
-        res['emb_grid_t'] = T1[:, self.embeddings_dim:2*self.embeddings_dim]
+        if self.shared_embedding:
+            #share the embedding for u0 and ut
+            res['emb_grid_t'] = res['emb_grid_0'] 
+        else:
+            res['emb_grid_t'] = T1[:, self.embeddings_dim:2*self.embeddings_dim]
         cp_est = T1[:, -1]
         if apply_sigmoids:
             res['cp_est'] = nn.functional.sigmoid(cp_est)
