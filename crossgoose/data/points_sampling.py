@@ -1,7 +1,7 @@
+import concurrent
 from abc import ABC, abstractmethod
 
-
-import concurrent
+import numpy as np
 import torch
 from torch import Tensor
 
@@ -111,16 +111,153 @@ class RandomOnCell(PointsSamlper):
 
         points = torch.stack([u0, ut], axis=1)
         # for consistency we fill  flows[:,0] with nonsense and mask it out
-        flows = torch.stack([torch.zeros_like(flows),flows],axis=1)
+        flows = torch.stack([torch.zeros_like(flows), flows], axis=1)
 
         mask = torch.ones(
             size=points.shape[:2],
             dtype=bool,
             device=points.device
         )
-        mask[:,0] = False #for simple u0,ut sampling only the flows at flows[:,1] is valid
+        # for simple u0,ut sampling only the flows at flows[:,1] is valid
+        mask[:, 0] = False
 
         return points, flows, mask
 
 
-# class FlowTracker(PointsSamlper):
+class RandomOnCellV2(PointsSamlper):
+    def __init__(
+        self,
+        n_samples: int,
+        sigma: float
+    ):
+        super().__init__()
+        self.n_samples = n_samples
+        self.sigma = sigma
+
+    def sample(
+        self,
+        image: Tensor,
+        labels: Tensor,
+        grid_flow: GridFlow
+    ):
+        h, w = image.shape
+
+        # get all non zero labels
+        pts_init = torch.nonzero(labels)
+        # sample n_samples
+        samples_idx = torch.randint(
+            0, pts_init.shape[0],
+            size=(self.n_samples,)
+        )
+        pts_init = pts_init[samples_idx]
+        pts_labels = labels[pts_init[:, 0], pts_init[:, 1]]
+
+        # for each point u0, pick a random point in the same instance
+        unique_labels = torch.unique(pts_labels)
+        label_points = {
+            int(k): torch.nonzero(labels == k) for k in unique_labels
+        }
+        label_points_nb = {int(k): v.shape[0] for k, v in label_points.items()}
+        max_pts = np.max(list(label_points_nb.values()))
+        # we pick random integers less than the max number of px in an instance, then mod it to the actual number per instance
+        pts_t_samples_idx = torch.randint(
+            0, max_pts,
+            size=(self.n_samples,)
+        )
+
+        pts_t = torch.stack([
+            label_points[int(k)][pts_t_samples_idx[i] % label_points_nb[int(k)]] for i, k in enumerate(pts_labels)
+        ], axis=0).float()
+
+        min_bound = torch.tensor([0, 0], device=pts_init.device)
+        max_bound = torch.tensor([h, w], device=pts_init.device)-1
+        pert = self.sigma * torch.randn_like(pts_t)
+        pts_t = torch.clamp(
+            pts_t + pert,
+            min=min_bound, max=max_bound
+        )
+
+        flows = grid_flow.query_multiple_labels_threaded(
+            pos=pts_t.numpy(),
+            labels=pts_labels.numpy()
+        )
+        flows = torch.from_numpy(flows).float()
+
+        points = torch.stack([pts_init, pts_t], axis=1)
+
+        # for consistency we fill  flows[:,0] with nonsense and mask it out
+        flows = torch.stack([torch.zeros_like(flows), flows], axis=1)
+
+        mask = torch.ones(
+            size=points.shape[:2],
+            dtype=bool,
+            device=points.device
+        )
+        # for simple u0,ut sampling only the flows at flows[:,1] is valid
+        mask[:, 0] = False
+
+        return points, flows, mask
+
+
+class TrajectorySampler(PointsSamlper):
+    def __init__(
+        self,
+        n_steps: int,
+        n_samples: int
+    ):
+        self.n_steps = n_steps
+        self.n_samples = n_samples
+
+    def sample(
+        self,
+        image: Tensor,
+        labels: Tensor,
+        grid_flow: GridFlow
+    ):
+        h, w = image.shape
+
+        # get all non zero labels
+        pts_init = torch.nonzero(labels)
+        # sample n_samples
+        samples_idx = torch.randint(
+            0, pts_init.shape[0],
+            size=(self.n_samples,)
+        )
+        pts_init = pts_init[samples_idx].numpy()
+        pts_labels = labels[pts_init[:, 0], pts_init[:, 1]].numpy()
+
+        # create points (N,T,2)
+        points = np.zeros(
+            (self.n_samples, self.n_steps, 2)
+        )
+        points[:, 0] = pts_init
+
+        # create flows (N,T,2)
+        flows = np.zeros(
+            (self.n_samples, self.n_steps, 2)
+        )
+        flows[:, 0] = grid_flow.query_multiple_labels_threaded(
+            pos=points[:, 0],
+            labels=pts_labels
+        )
+
+        min_bound = np.array([0, 0])
+        max_bound = np.array([h, w])-1
+
+        for t in range(self.n_steps-1):
+            points[:, t+1] = np.clip(
+                points[:, t] + flows[:, t],
+                min=min_bound, max=max_bound
+            )
+            flows[:, t+1] = grid_flow.query_multiple_labels_threaded(
+                pos=points[:, t],
+                labels=pts_labels
+            )
+
+        # TODO mask out when points have reached convergence ?
+
+        points = torch.from_numpy(points).float()
+        flows = torch.from_numpy(flows).float()
+        mask = torch.ones((self.n_samples, self.n_steps), dtype=bool)
+
+        return points, flows, mask

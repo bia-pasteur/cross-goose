@@ -59,7 +59,7 @@ model:
   n_steps: 200
   backbone_realease_delay: null
   shared_embedding: false
-  train_on_trajectories: false
+  train_on_trajectories: true
 data:
   data_root: data
   dataset: Dataset_v02
@@ -74,10 +74,11 @@ data:
     scale_range: null
     rot90: false
   points_sampler:
-    class_path: crossgoose.data.points_sampling.RandomOnCell
+    class_path: crossgoose.data.points_sampling.TrajectorySampler
     init_args:
       n_samples: 50
-      sigma: 4.0
+      n_steps: 200
+      # sigma: 4.0
   recompute_flows: false
   closure_radius: 8
   center_method: graph_center_weighted

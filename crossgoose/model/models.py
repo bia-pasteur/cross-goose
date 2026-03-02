@@ -229,9 +229,9 @@ class CrossGooseModel(lightning.LightningModule):
     def _gather_emb_batch(self, raster: torch.Tensor, u: torch.Tensor):
         # expects raster of shape (B,dim_emb,H,W)
         # TODO decorelate the batch id (u[:, 0]) to the other coordinates
-        idx0 = u[:, 0].long()
-        idx1 = u[:, 1].long()
-        idx2 = u[:, 2].long()
+        idx0 = u[..., 0].long()
+        idx1 = u[..., 1].long()
+        idx2 = u[..., 2].long()
         gathered_emb = raster[idx0, :, idx1, idx2]
         return gathered_emb
 
@@ -278,7 +278,23 @@ class CrossGooseModel(lightning.LightningModule):
                     "This looks like a two points sampler. "
                     "Try changing the dataloader points_sampler.")
 
-            raise NotImplementedError
+            u0 = torch.concat([pts_batch, pts_coord[:, 0]], axis=-1)
+            e0 = self._gather_emb_batch(emb_grid_0, u0)
+
+            _, n_steps, _ = pts_coord.shape
+
+            pts_batch = torch.tile(pts_batch[..., None], (1, n_steps, 1))
+            ut = torch.concat([pts_batch, pts_coord], axis=-1)
+
+            et = self._gather_emb_batch(emb_grid_t, ut)
+
+            # tile e0 to et shape
+            e0 = torch.tile(e0[:, None], (1, n_steps, 1))
+
+            flow_est = self.flow_fn(e0, et)
+
+            loss_steps = self.criterion_flow(
+                flow_est, self.flow_fac * pts_flows)
 
         else:
             # v1.0 behaviour

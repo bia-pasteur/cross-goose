@@ -62,8 +62,8 @@ model:
 data:
   data_root: data
   dataset: Dataset_v02
-  batch_size: 8
-  num_workers: 24
+  batch_size: 4
+  num_workers: 12
   validation: true
   augmentation_params:
     patch_size: 256
@@ -73,10 +73,10 @@ data:
     scale_range: null
     rot90: false
   points_sampler:
-    class_path: crossgoose.data.points_sampling.RandomOnCell
+    class_path: crossgoose.data.points_sampling.TrajectorySampler
     init_args:
       n_samples: 100
-      sigma: 4.0
+      n_steps: 200
   recompute_flows: false
   closure_radius: 8
   center_method: graph_center_weighted

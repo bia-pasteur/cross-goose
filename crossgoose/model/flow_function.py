@@ -75,8 +75,8 @@ class FlowLinear(FlowFunction):
         )
 
     def forward(self, e0, et):
-        n, f = e0.shape
-        assert tuple(et.shape) == (n, f)
-        e0et = torch.concat([e0, et], dim=1)
+        # n, f = e0.shape
+        # assert tuple(et.shape) == (n, f)
+        e0et = torch.concat([e0, et], dim=-1)
 
         return self.transform(e0et)
