@@ -18,7 +18,8 @@ from crossgoose.data.data_augment import AugmentationParams, random_transform
 from crossgoose.data.points_sampling import PointsSamlper
 from crossgoose.gridflow import BatchGridFlow, GridFlow
 from crossgoose.mask_utils import convert_labels_to_onehot
-from crossgoose.utils import ImageNormalization, default, imread, normalize_image
+from crossgoose.utils import (ImageNormalization, default, imread,
+                              normalize_image)
 
 
 class FlowDataset(Dataset):
@@ -233,21 +234,32 @@ class FlowDataset(Dataset):
         )
 
         # sample u0, ut, flows
-        u0, ut, flow_u0_ut = self.points_sampler.sample(
+        # returns points and flows of shape (N,T,2), mask of shape (N,T)
+        # for simple u0,ut T=2
+        pts_coord, pts_flows, pts_mask = self.points_sampler.sample(
             image=image,
             labels=labels,
             grid_flow=grid_flow
         )
+        # sanity checks
+        assert pts_coord.shape[2] == 2
+        assert pts_coord.shape == pts_flows.shape
+        assert pts_mask.shape == pts_coord.shape[:2]
+        n_samples = pts_coord.shape[0]
+
+        # store batch ids to recover in batch collate
+        pts_batch = torch.zeros((n_samples, 1), dtype=int)
 
         ret = {
             'image': image.unsqueeze(dim=0).float(),
             'labels': labels,
+            'pts_coord': pts_coord,
+            'pts_flows': pts_flows,
+            'pts_mask': pts_mask,
+            'pts_batch': pts_batch,
             'flowgrid': grid_flow,
             'source': self.images_files[index],
             'transforms': transforms,
-            'u0': u0,
-            'ut': ut,
-            'flow_u0_ut': flow_u0_ut
         }
         if self.return_overlap_map:
             ret['overlap_mask'] = overlap_mask
@@ -263,20 +275,12 @@ def flow_data_collate_fn(batch):
                 clone[key] = BatchGridFlow([d[key] for d in batch])
             elif key == 'transforms':
                 clone[key] = [d[key] for d in batch]
-            elif key in ['u0', 'ut']:
-                # prepend batch id in coordinates so that it is (b,i,j)
-                clone[key] = torch.concat([
-                    torch.concat(
-                        [torch.full(
-                            size=(d[key].shape[0], 1),
-                            fill_value=b,
-                            dtype=d[key].dtype,
-                            device=d[key].device),
-                         d[key]],
-                        axis=1)
-                    for b, d in enumerate(batch)],
-                    axis=0)
-            elif key == 'flow_u0_ut':
+            elif key == 'pts_batch':
+                # concat samples along first axis and add batch id
+                clone[key] = torch.concat(
+                    [d[key] + b for b, d in enumerate(batch)], axis=0)
+            elif 'pts_' in key:
+                # concat samples along first axis
                 clone[key] = torch.concat([d[key] for d in batch], axis=0)
             else:
                 clone[key] = default_collate([d[key] for d in batch])

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Tuple
+
 
 import concurrent
 import torch
@@ -10,7 +10,7 @@ from crossgoose.gridflow import GridFlow
 
 class PointsSamlper(ABC):
     @abstractmethod
-    def sample(self, image: Tensor, labels: Tensor, grid_flow: GridFlow) -> Tuple[Tensor, Tensor, Tensor]:
+    def sample(self, image: Tensor, labels: Tensor, grid_flow: GridFlow) -> tuple[Tensor, Tensor, Tensor]:
         raise NotImplementedError
 
 
@@ -67,8 +67,11 @@ class RandomOnCell(PointsSamlper):
     ):
         h, w = image.shape
 
+        # get all non zero labels
         u0 = torch.nonzero(labels)
         l0 = labels[u0[:, 0], u0[:, 1]]
+
+        # we then generate for each points n_samples points that fall within the same label with perturbation sigma
 
         min_bound = torch.tensor([0, 0], device=u0.device)
         max_bound = torch.tensor([h, w], device=u0.device)-1
@@ -106,7 +109,18 @@ class RandomOnCell(PointsSamlper):
         flows = flows.reshape((-1, 2)).float()
         u0 = torch.tile(u0, (self.n_samples, 1)).float()
 
-        return u0, ut, flows
+        points = torch.stack([u0, ut], axis=1)
+        # for consistency we fill  flows[:,0] with nonsense and mask it out
+        flows = torch.stack([torch.zeros_like(flows),flows],axis=1)
+
+        mask = torch.ones(
+            size=points.shape[:2],
+            dtype=bool,
+            device=points.device
+        )
+        mask[:,0] = False #for simple u0,ut sampling only the flows at flows[:,1] is valid
+
+        return points, flows, mask
 
 
 # class FlowTracker(PointsSamlper):

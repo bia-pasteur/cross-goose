@@ -44,13 +44,15 @@ class CrossGooseModel(lightning.LightningModule):
         crit_cellprob_weight: float = 2.0,
         n_steps: int = 200,
         backbone_realease_delay: int | None = None,
-        shared_embedding: bool = False
+        shared_embedding: bool = False,
+        train_on_trajectories: bool = False
     ):
         super().__init__()
         self.n_steps = n_steps
         self.embeddings_dim = embeddings_dim
         self.backbone_realease_delay = backbone_realease_delay
         self.shared_embedding = shared_embedding
+        self.train_on_trajectories = train_on_trajectories
 
         self.backbone = CPBackbone(device=self.device)
         self.backbone_out = self.backbone.nbase[1]
@@ -193,8 +195,8 @@ class CrossGooseModel(lightning.LightningModule):
 
         res['emb_grid_0'] = T1[:, :self.embeddings_dim]
         if self.shared_embedding:
-            #share the embedding for u0 and ut
-            res['emb_grid_t'] = res['emb_grid_0'] 
+            # share the embedding for u0 and ut
+            res['emb_grid_t'] = res['emb_grid_0']
         else:
             res['emb_grid_t'] = T1[:, self.embeddings_dim:2*self.embeddings_dim]
         cp_est = T1[:, -1]
@@ -226,6 +228,7 @@ class CrossGooseModel(lightning.LightningModule):
 
     def _gather_emb_batch(self, raster: torch.Tensor, u: torch.Tensor):
         # expects raster of shape (B,dim_emb,H,W)
+        # TODO decorelate the batch id (u[:, 0]) to the other coordinates
         idx0 = u[:, 0].long()
         idx1 = u[:, 1].long()
         idx2 = u[:, 2].long()
@@ -261,16 +264,41 @@ class CrossGooseModel(lightning.LightningModule):
 
         loss_dict['loss'] += loss_dict['loss_cp']
 
-        # get u0
-        u0 = batch['u0']
-        ut = batch['ut']
-        e0 = self._gather_emb_batch(emb_grid_0, u0)
-        et = self._gather_emb_batch(emb_grid_t, ut)
+        # get points
+        pts_coord = batch['pts_coord']
+        pts_flows = batch['pts_flows']
+        pts_mask = batch['pts_mask']
+        pts_batch = batch['pts_batch']
 
-        flow_est = self.flow_fn(e0, et)
-        flow_gt = batch['flow_u0_ut']
+        if self.train_on_trajectories:
+            if pts_coord.shape[1] == 2:
+                raise print(
+                    "WARNING: train_on_trajectories is True but dataloader "
+                    f"provided a set of points of length {pts_coord.shape[1]}==2. "
+                    "This looks like a two points sampler. "
+                    "Try changing the dataloader points_sampler.")
 
-        loss_steps = self.criterion_flow(flow_est, self.flow_fac * flow_gt)
+            raise NotImplementedError
+
+        else:
+            # v1.0 behaviour
+            if pts_coord.shape[1] != 2:
+                raise ValueError(
+                    "train_on_trajectories is False but dataloader "
+                    f"provided a set of points of length {pts_coord.shape[1]}!=2. "
+                    "Try changing the dataloader points_sampler.")
+
+            # concat the batch dim
+            u0 = torch.concat([pts_batch, pts_coord[:, 0]], axis=-1)
+            ut = torch.concat([pts_batch, pts_coord[:, 1]], axis=-1)
+            flow_gt = pts_flows[:, 1]
+
+            e0 = self._gather_emb_batch(emb_grid_0, u0)
+            et = self._gather_emb_batch(emb_grid_t, ut)
+
+            flow_est = self.flow_fn(e0, et)
+
+            loss_steps = self.criterion_flow(flow_est, self.flow_fac * flow_gt)
 
         loss_dict['loss_steps'] = loss_steps
         loss_dict['loss'] += loss_dict['loss_steps']
