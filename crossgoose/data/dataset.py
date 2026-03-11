@@ -236,7 +236,7 @@ class FlowDataset(Dataset):
         # sample u0, ut, flows
         # returns points and flows of shape (N,T,2), mask of shape (N,T)
         # for simple u0,ut T=2
-        pts_coord, pts_flows, pts_mask = self.points_sampler.sample(
+        pts_coord, pts_flows, pts_weights = self.points_sampler.sample(
             image=image,
             labels=labels,
             grid_flow=grid_flow
@@ -244,7 +244,7 @@ class FlowDataset(Dataset):
         # sanity checks
         assert pts_coord.shape[2] == 2
         assert pts_coord.shape == pts_flows.shape
-        assert pts_mask.shape == pts_coord.shape[:2]
+        assert pts_weights.shape == pts_coord.shape[:2]
         n_samples = pts_coord.shape[0]
 
         # store batch ids to recover in batch collate
@@ -255,7 +255,7 @@ class FlowDataset(Dataset):
             'labels': labels,
             'pts_coord': pts_coord,
             'pts_flows': pts_flows,
-            'pts_mask': pts_mask,
+            'pts_weights': pts_weights,
             'pts_batch': pts_batch,
             'flowgrid': grid_flow,
             'source': self.images_files[index],

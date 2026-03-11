@@ -10,7 +10,7 @@ trainer:
     class_path: lightning.pytorch.loggers.TensorBoardLogger
     init_args:
       save_dir: model_logs
-      name: model_test
+      name: model_v1.3.1_pxw_d02
   callbacks:
   - class_path: lightning.pytorch.callbacks.ModelCheckpoint
     init_args:
@@ -43,7 +43,6 @@ trainer:
   check_val_every_n_epoch: 1
   log_every_n_steps: 10
   enable_progress_bar: true
-  fast_dev_run: false
 model:
   flow_fn:
     class_path: crossgoose.model.flow_function.FlowLinear
@@ -60,7 +59,6 @@ model:
   backbone_realease_delay: null
   shared_embedding: false
   train_on_trajectories: true
-  time_error_weighting: true
 data:
   data_root: data
   dataset: Dataset_v02
@@ -77,15 +75,14 @@ data:
   points_sampler:
     class_path: crossgoose.data.points_sampling.TrajectorySampler
     init_args:
-      n_samples: 50
+      n_samples: 100
       n_steps: 200
       weight_by_location: true
-      # sigma: 4.0
   recompute_flows: false
   closure_radius: 8
   center_method: graph_center_weighted
-  bootstrap_factor: 1
-  prefetch_factor: 2
+  bootstrap_factor: 8
+  prefetch_factor: 4
   lazy_flow_computing: false
   return_overlap_map: false
   keep_data_in_memory: true

@@ -72,8 +72,7 @@ class CrossGooseModel(lightning.LightningModule):
             sz=1
         )
 
-        self.criterion_flow = nn.MSELoss(
-            reduction="mean" if not self.train_on_trajectories else 'none')
+        self.criterion_flow = nn.MSELoss('none')
         self.criterion_cellprob = nn.BCEWithLogitsLoss(reduction="mean")
 
         self.flow_fac = 5.
@@ -270,7 +269,7 @@ class CrossGooseModel(lightning.LightningModule):
         # get points
         pts_coord = batch['pts_coord']
         pts_flows = batch['pts_flows']
-        pts_mask = batch['pts_mask']
+        pts_weights = batch['pts_weights']
         pts_batch = batch['pts_batch']
 
         if self.train_on_trajectories:
@@ -298,6 +297,8 @@ class CrossGooseModel(lightning.LightningModule):
 
             error = torch.mean(self.criterion_flow(
                 flow_est, self.flow_fac * pts_flows), dim=-1)  # reduce on spatial dim
+            
+            error = error * pts_weights
 
             if self.time_error_weighting:
                 error_per_timeframe = torch.sum(error, dim=1, keepdim=True)
@@ -305,7 +306,7 @@ class CrossGooseModel(lightning.LightningModule):
                     torch.sum(error_per_timeframe)  # normalize
                 loss_steps = torch.sum(error * error_per_timeframe) / n_samples
             else:
-                loss_steps = torch.mean(error)
+                loss_steps = torch.sum(error)
 
         else:
             # v1.0 behaviour
@@ -325,7 +326,11 @@ class CrossGooseModel(lightning.LightningModule):
 
             flow_est = self.flow_fn(e0, et)
 
-            loss_steps = self.criterion_flow(flow_est, self.flow_fac * flow_gt)
+            error = torch.mean(self.criterion_flow(
+                flow_est, self.flow_fac * pts_flows), dim=-1)  # reduce on spatial dim
+            error = error * pts_weights
+
+            loss_steps = torch.sum(error)
 
         loss_dict['loss_steps'] = loss_steps
         loss_dict['loss'] += loss_dict['loss_steps']

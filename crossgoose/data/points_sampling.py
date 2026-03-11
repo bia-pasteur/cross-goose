@@ -113,15 +113,15 @@ class RandomOnCell(PointsSamlper):
         # for consistency we fill  flows[:,0] with nonsense and mask it out
         flows = torch.stack([torch.zeros_like(flows), flows], axis=1)
 
-        mask = torch.ones(
+        weights = torch.ones(
             size=points.shape[:2],
-            dtype=bool,
             device=points.device
         )
         # for simple u0,ut sampling only the flows at flows[:,1] is valid
-        mask[:, 0] = False
+        weights[:, 0] = 0
+        weights /= weights.sum()
 
-        return points, flows, mask
+        return points, flows, weights
 
 
 class RandomOnCellV2(PointsSamlper):
@@ -188,25 +188,27 @@ class RandomOnCellV2(PointsSamlper):
         # for consistency we fill  flows[:,0] with nonsense and mask it out
         flows = torch.stack([torch.zeros_like(flows), flows], axis=1)
 
-        mask = torch.ones(
+        weights = torch.ones(
             size=points.shape[:2],
-            dtype=bool,
             device=points.device
         )
         # for simple u0,ut sampling only the flows at flows[:,1] is valid
-        mask[:, 0] = False
+        weights[:, 0] = 0
+        weights /= weights.sum()
 
-        return points, flows, mask
+        return points, flows, weights
 
 
 class TrajectorySampler(PointsSamlper):
     def __init__(
         self,
         n_steps: int,
-        n_samples: int
+        n_samples: int,
+        weight_by_location: bool
     ):
         self.n_steps = n_steps
         self.n_samples = n_samples
+        self.weight_by_location = weight_by_location
 
     def sample(
         self,
@@ -254,10 +256,25 @@ class TrajectorySampler(PointsSamlper):
                 labels=pts_labels
             )
 
-        # TODO mask out when points have reached convergence ?
+        if self.weight_by_location:
+            # we count how many times each pixel is sampled 
+            # and weight points by the inverse pixel count
+            weights_spatial = np.zeros((h, w))
+            points_int = points.astype(int)
+            u_coors, u_counts = np.unique(
+                points_int.reshape((-1, 2)), axis=0, return_counts=True)
+            weights_spatial[u_coors[:, 0], u_coors[:, 1]] = u_counts
+            # we could do some smoothing here on weights_spatial
+            weights_spatial = weights_spatial / np.sum(weights_spatial)
+
+            weights = weights_spatial[points_int[..., 0], points_int[..., 1]]
+            assert weights.shape == (self.n_samples, self.n_steps)
+            del weights_spatial
+        else:
+            weights = np.ones((self.n_samples, self.n_steps)) / (self.n_samples * self.n_steps)
 
         points = torch.from_numpy(points).float()
         flows = torch.from_numpy(flows).float()
-        mask = torch.ones((self.n_samples, self.n_steps), dtype=bool)
+        weights = torch.from_numpy(weights).float()
 
-        return points, flows, mask
+        return points, flows, weights
