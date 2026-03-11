@@ -10,7 +10,7 @@ trainer:
     class_path: lightning.pytorch.loggers.TensorBoardLogger
     init_args:
       save_dir: model_logs
-      name: model_v1.3.1_pxw_d02
+      name: model_v1.3.2_pxw_d02
   callbacks:
   - class_path: lightning.pytorch.callbacks.ModelCheckpoint
     init_args:
