@@ -64,11 +64,10 @@ class FlowDataset(Dataset):
         assert len(self.images_files) > 0
         assert len(self.images_files) == len(self.masks_files)
         if not len(self.images_files) == len(self.masks_onehot_files):
-            print(f"[{self.name}] missing onehot masks: generating ...")
-            self.generate_one_hot_masks()
-            self._fetch_files()
-            assert len(self.images_files) == len(
-                self.masks_onehot_files), (self.images_files, self.masks_onehot_files)
+            print(f"[{self.name}] missing onehot masks")
+            self.use_onehot = False
+        else:
+            self.use_onehot = True
 
         self.flow_files = []
         desc = f"[{self.name}] " + f"checking flows for {subset} data"
@@ -120,37 +119,28 @@ class FlowDataset(Dataset):
         self.masks_onehot_files = natsorted(
             [f for f in dir_file if re.search(r'.*\_masks_onehot\.(tif|png)', f)])
 
-    def generate_one_hot_masks(self):
-        for masks_file in tqdm(self.masks_files, desc=f'computing onehot masks for {self.name}'):
-            name, _ = masks_file.split('.')
-            file = os.path.join(self.directory, f"{name}_onehot.tif")
-            if not os.path.exists(file):
-                labels = imread(os.path.join(
-                    self.directory, masks_file))
-                mask_onehot = convert_labels_to_onehot(
-                    labels, closure_radius=self.closure_radius)
-
-                tifffile.imwrite(
-                    file,
-                    data=mask_onehot,
-                    compression='zlib',
-                    metadata={'axes': 'ZYX'},
-                )
-
     def compute_flow(
         self,
         flow_file_path: str,
         image_index: int,
         center_method: str
     ) -> str:
-
-        labels_one_hot = imread(os.path.join(
-            self.directory, self.masks_onehot_files[image_index]))
-        gf = GridFlow.from_one_hot(
-            labels_one_hot=labels_one_hot,
-            n_interpol=1,
-            flow_center_method=center_method
-        )
+        if self.use_onehot:
+            labels_one_hot = imread(os.path.join(
+                self.directory, self.masks_onehot_files[image_index]))
+            gf = GridFlow.from_one_hot(
+                labels_one_hot=labels_one_hot,
+                n_interpol=1,
+                flow_center_method=center_method
+            )
+        else:
+            labels = imread(os.path.join(
+                self.directory, self.masks_files[image_index]))
+            gf = GridFlow.from_labels(
+                labels=labels,
+                n_interpol=1,
+                flow_center_method=center_method
+            )
         gf.to_file(flow_file_path)
 
         return flow_file_path

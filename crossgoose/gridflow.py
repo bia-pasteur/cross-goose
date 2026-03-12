@@ -52,6 +52,7 @@ def _mask_to_pts_and_flw(
 ):
     mask_size = np.sum(mask)
     assert mask_size > 0
+    assert len(mask.shape) == 2
     # compute classical cp flow
     # first get the local mask
     slices = find_objects(mask.astype(int))
@@ -115,6 +116,10 @@ class GridFlow:
     ):
         self.n_interpol = n_interpol
 
+        for k in points.keys():
+            assert k in flows
+            assert flows[k].shape[0] == points[k].shape[0]
+
         assert len(flows) == len(points)
         self.points = {k: KDTree(v) for k, v in points.items()}
         self.flows = flows
@@ -133,11 +138,11 @@ class GridFlow:
         contour_method: Literal['marching_squares',
                                 'dilation'] = 'marching_squares',
     ) -> Self:
-
+        assert len(labels_one_hot.shape) == 3
         points: Dict[str, KDTree] = {}
         flows: Dict[str, np.ndarray] = {}
 
-        non_zero_labels = np.nonzero(np.sum(labels_one_hot,axis=(1,2)))
+        non_zero_labels = np.nonzero(np.sum(labels_one_hot, axis=(1, 2)))
 
         for k in non_zero_labels:
             mask = labels_one_hot[k]
@@ -152,6 +157,44 @@ class GridFlow:
 
             points[k+1] = pts
             flows[k+1] = flw
+
+        return GridFlow(
+            points=points,
+            flows=flows,
+            n_interpol=n_interpol
+        )
+
+    @classmethod
+    def from_labels(
+        self,
+        labels: np.ndarray,
+        n_interpol: int,
+        flow_center_method: CenterMethod,
+        inside_sub_sampling: int = 4,
+        contour_sub_sampling: int = 2,
+        contour_method: Literal['marching_squares',
+                                'dilation'] = 'marching_squares',
+    ) -> Self:
+        assert len(labels.shape) == 2
+        points: Dict[str, KDTree] = {}
+        flows: Dict[str, np.ndarray] = {}
+
+        non_zero_labels = np.unique(labels)
+
+        for k in non_zero_labels:
+            if k != 0:
+                mask = labels == k
+
+                pts, flw = _mask_to_pts_and_flw(
+                    mask=mask,
+                    flow_center_method=flow_center_method,
+                    inside_sub_sampling=inside_sub_sampling,
+                    contour_sub_sampling=contour_sub_sampling,
+                    contour_method=contour_method
+                )
+
+                points[k] = pts
+                flows[k] = flw
 
         return GridFlow(
             points=points,
@@ -249,8 +292,13 @@ class GridFlow:
             raise KeyError(
                 f"label {label} not in Gridflow with labels {self.points.keys()}")
 
+        n_pts_max =  self.points[label].n
+        ninterpol = min(self.n_interpol,self.points[label].n)
         distance, nearest_vertex = self.points[label].query(
-            pos, k=self.n_interpol)
+            pos, k=ninterpol)
+        # warning missing neighbors are insicated with n_pts_max
+        valid_pts = nearest_vertex < n_pts_max
+        assert np.all(valid_pts), f"{pos.shape=}, {self.points[label].data.shape=}, , {self.n_interpol=}"
 
         try:
             vec = self.flows[label][nearest_vertex]
@@ -259,7 +307,7 @@ class GridFlow:
                 f"failed to fetch {nearest_vertex=}, in flows {self.flows[label].shape=}")
             raise e
 
-        if self.n_interpol > 1:
+        if ninterpol > 1:
             # agglomerate results if interpolating
             weights = 1 / np.clip(distance, 1.0, np.inf)
             weights = weights / np.sum(weights)
