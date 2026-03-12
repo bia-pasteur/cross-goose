@@ -75,7 +75,7 @@ data:
   points_sampler:
     class_path: crossgoose.data.points_sampling.TrajectorySampler
     init_args:
-      n_samples: 100
+      n_samples: 200
       n_steps: 200
       weight_by_location: true
   recompute_flows: false

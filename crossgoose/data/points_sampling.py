@@ -257,24 +257,23 @@ class TrajectorySampler(PointsSamlper):
             )
 
         if self.weight_by_location:
-            # we count how many times each pixel is sampled 
+            # we count how many times each pixel is sampled
             # and weight points by the inverse pixel count
-            weights_spatial = np.zeros((h, w))
             points_int = points.astype(int)
-            u_coors, u_counts = np.unique(
-                points_int.reshape((-1, 2)), axis=0, return_counts=True)
-            weights_spatial[u_coors[:, 0], u_coors[:, 1]] = u_counts
-            # we could do some smoothing here on weights_spatial
-            weights_spatial = weights_spatial / np.sum(weights_spatial)
-
-            weights = weights_spatial[points_int[..., 0], points_int[..., 1]]
-            assert weights.shape == (self.n_samples, self.n_steps)
-            del weights_spatial
+            _, u_inverse, u_counts = np.unique(
+                points_int.reshape((-1, 2)), axis=0,
+                return_counts=True, return_inverse=True)
+            weights = 1 / \
+                u_counts[u_inverse].reshape((self.n_samples, self.n_steps))
+            weights /= weights.sum()
         else:
-            weights = np.ones((self.n_samples, self.n_steps)) / (self.n_samples * self.n_steps)
+            weights = np.ones((self.n_samples, self.n_steps)) / \
+                (self.n_samples * self.n_steps)
+            weights /= weights.sum()
 
         points = torch.from_numpy(points).float()
         flows = torch.from_numpy(flows).float()
         weights = torch.from_numpy(weights).float()
+        # weights /= weights.sum()
 
         return points, flows, weights
