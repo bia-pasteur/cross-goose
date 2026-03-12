@@ -10,7 +10,7 @@ trainer:
     class_path: lightning.pytorch.loggers.TensorBoardLogger
     init_args:
       save_dir: model_logs
-      name: model_v1.3.2_pxw_d02
+      name: model_v1.3.2_pxwn_d02
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
@@ -77,7 +77,7 @@ data:
     init_args:
       n_samples: 256
       n_steps: 200
-      noise_sigma: 0
+      noise_sigma: [0, 0.1, 0.2]
       weight_by_location: true
   recompute_flows: false
   closure_radius: 8

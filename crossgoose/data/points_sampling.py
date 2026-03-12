@@ -204,11 +204,20 @@ class TrajectorySampler(PointsSamlper):
         self,
         n_steps: int,
         n_samples: int,
-        weight_by_location: bool
+        weight_by_location: bool,
+        noise_sigma: float|list[float],
+        seed: int = 0
     ):
         self.n_steps = n_steps
         self.n_samples = n_samples
         self.weight_by_location = weight_by_location
+        
+        if isinstance(noise_sigma,float):
+            self.noise_sigma = [noise_sigma]
+        else:
+            self.noise_sigma = noise_sigma
+
+        self.rng = np.random.default_rng(seed)
 
     def sample(
         self,
@@ -246,9 +255,16 @@ class TrajectorySampler(PointsSamlper):
         min_bound = np.array([0, 0])
         max_bound = np.array([h, w])-1
 
+        # pick one sigma
+        s = self.rng.choice(self.noise_sigma)
+
         for t in range(self.n_steps-1):
+            
+            #compute pertubation
+            pert = self.rng.normal(0, s, points[:, t].shape)
+
             points[:, t+1] = np.clip(
-                points[:, t] + flows[:, t],
+                points[:, t] + flows[:, t] + pert,
                 min=min_bound, max=max_bound
             )
             flows[:, t+1] = grid_flow.query_multiple_labels_threaded(
