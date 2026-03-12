@@ -134,11 +134,12 @@ class GridFlow:
                                 'dilation'] = 'marching_squares',
     ) -> Self:
 
-        n_labels = labels_one_hot.shape[0]
         points: Dict[str, KDTree] = {}
         flows: Dict[str, np.ndarray] = {}
 
-        for k in range(n_labels):
+        non_zero_labels = np.nonzero(np.sum(labels_one_hot,axis=(1,2)))
+
+        for k in non_zero_labels:
             mask = labels_one_hot[k]
 
             pts, flw = _mask_to_pts_and_flw(
