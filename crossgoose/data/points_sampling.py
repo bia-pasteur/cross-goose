@@ -144,57 +144,63 @@ class RandomOnCellV2(PointsSamlper):
 
         # get all non zero labels
         pts_init = torch.nonzero(labels)
-        # sample n_samples
-        samples_idx = torch.randint(
-            0, pts_init.shape[0],
-            size=(self.n_samples,)
-        )
-        pts_init = pts_init[samples_idx]
-        pts_labels = labels[pts_init[:, 0], pts_init[:, 1]]
 
-        # for each point u0, pick a random point in the same instance
-        unique_labels = torch.unique(pts_labels)
-        label_points = {
-            int(k): torch.nonzero(labels == k) for k in unique_labels
-        }
-        label_points_nb = {int(k): v.shape[0] for k, v in label_points.items()}
-        max_pts = np.max(list(label_points_nb.values()))
-        # we pick random integers less than the max number of px in an instance, then mod it to the actual number per instance
-        pts_t_samples_idx = torch.randint(
-            0, max_pts,
-            size=(self.n_samples,)
-        )
+        if len(pts_init) > 0:
+            # sample n_samples
+            samples_idx = torch.randint(
+                0, pts_init.shape[0],
+                size=(self.n_samples,)
+            )
+            pts_init = pts_init[samples_idx]
+            pts_labels = labels[pts_init[:, 0], pts_init[:, 1]]
 
-        pts_t = torch.stack([
-            label_points[int(k)][pts_t_samples_idx[i] % label_points_nb[int(k)]] for i, k in enumerate(pts_labels)
-        ], axis=0).float()
+            # for each point u0, pick a random point in the same instance
+            unique_labels = torch.unique(pts_labels)
+            label_points = {
+                int(k): torch.nonzero(labels == k) for k in unique_labels
+            }
+            label_points_nb = {int(k): v.shape[0] for k, v in label_points.items()}
+            max_pts = np.max(list(label_points_nb.values()))
+            # we pick random integers less than the max number of px in an instance, then mod it to the actual number per instance
+            pts_t_samples_idx = torch.randint(
+                0, max_pts,
+                size=(self.n_samples,)
+            )
 
-        min_bound = torch.tensor([0, 0], device=pts_init.device)
-        max_bound = torch.tensor([h, w], device=pts_init.device)-1
-        pert = self.sigma * torch.randn_like(pts_t)
-        pts_t = torch.clamp(
-            pts_t + pert,
-            min=min_bound, max=max_bound
-        )
+            pts_t = torch.stack([
+                label_points[int(k)][pts_t_samples_idx[i] % label_points_nb[int(k)]] for i, k in enumerate(pts_labels)
+            ], axis=0).float()
 
-        flows = grid_flow.query_multiple_labels_threaded(
-            pos=pts_t.numpy(),
-            labels=pts_labels.numpy()
-        )
-        flows = torch.from_numpy(flows).float()
+            min_bound = torch.tensor([0, 0], device=pts_init.device)
+            max_bound = torch.tensor([h, w], device=pts_init.device)-1
+            pert = self.sigma * torch.randn_like(pts_t)
+            pts_t = torch.clamp(
+                pts_t + pert,
+                min=min_bound, max=max_bound
+            )
 
-        points = torch.stack([pts_init, pts_t], axis=1)
+            flows = grid_flow.query_multiple_labels_threaded(
+                pos=pts_t.numpy(),
+                labels=pts_labels.numpy()
+            )
+            flows = torch.from_numpy(flows).float()
 
-        # for consistency we fill  flows[:,0] with nonsense and mask it out
-        flows = torch.stack([torch.zeros_like(flows), flows], axis=1)
+            points = torch.stack([pts_init, pts_t], axis=1)
 
-        weights = torch.ones(
-            size=points.shape[:2],
-            device=points.device
-        )
-        # for simple u0,ut sampling only the flows at flows[:,1] is valid
-        weights[:, 0] = 0
-        weights /= weights.sum()
+            # for consistency we fill  flows[:,0] with nonsense and mask it out
+            flows = torch.stack([torch.zeros_like(flows), flows], axis=1)
+
+            weights = torch.ones(
+                size=points.shape[:2],
+                device=points.device
+            )
+            # for simple u0,ut sampling only the flows at flows[:,1] is valid
+            weights[:, 0] = 0
+            weights /= weights.sum()
+        else:
+            points = torch.zeros((0,2,2))
+            flows = torch.zeros((0,2,2))
+            weights = torch.zeros((0,2,))
 
         return points, flows, weights
 
@@ -229,63 +235,68 @@ class TrajectorySampler(PointsSamlper):
 
         # get all non zero labels
         pts_init = torch.nonzero(labels)
-        # sample n_samples
-        samples_idx = torch.randint(
-            0, pts_init.shape[0],
-            size=(self.n_samples,)
-        )
-        pts_init = pts_init[samples_idx].numpy()
-        pts_labels = labels[pts_init[:, 0], pts_init[:, 1]].numpy()
-
-        # create points (N,T,2)
-        points = np.zeros(
-            (self.n_samples, self.n_steps, 2)
-        )
-        points[:, 0] = pts_init
-
-        # create flows (N,T,2)
-        flows = np.zeros(
-            (self.n_samples, self.n_steps, 2)
-        )
-        flows[:, 0] = grid_flow.query_multiple_labels_threaded(
-            pos=points[:, 0],
-            labels=pts_labels
-        )
-
-        min_bound = np.array([0, 0])
-        max_bound = np.array([h, w])-1
-
-        # pick one sigma
-        s = self.rng.choice(self.noise_sigma)
-
-        for t in range(self.n_steps-1):
-            
-            #compute pertubation
-            pert = self.rng.normal(0, s, points[:, t].shape)
-
-            points[:, t+1] = np.clip(
-                points[:, t] + flows[:, t] + pert,
-                min=min_bound, max=max_bound
+        if len(pts_init) > 0:
+            # sample n_samples
+            samples_idx = torch.randint(
+                0, pts_init.shape[0],
+                size=(self.n_samples,)
             )
-            flows[:, t+1] = grid_flow.query_multiple_labels_threaded(
-                pos=points[:, t],
+            pts_init = pts_init[samples_idx].numpy()
+            pts_labels = labels[pts_init[:, 0], pts_init[:, 1]].numpy()
+
+            # create points (N,T,2)
+            points = np.zeros(
+                (self.n_samples, self.n_steps, 2)
+            )
+            points[:, 0] = pts_init
+
+            # create flows (N,T,2)
+            flows = np.zeros(
+                (self.n_samples, self.n_steps, 2)
+            )
+            flows[:, 0] = grid_flow.query_multiple_labels_threaded(
+                pos=points[:, 0],
                 labels=pts_labels
             )
 
-        if self.weight_by_location:
-            # we count how many times each pixel is sampled
-            # and weight points by the inverse pixel count
-            points_int = points.astype(int)
-            _, u_inverse, u_counts = np.unique(
-                points_int.reshape((-1, 2)), axis=0,
-                return_counts=True, return_inverse=True)
-            weights = 1 / \
-                u_counts[u_inverse].reshape((self.n_samples, self.n_steps))
-            weights /= weights.sum()
+            min_bound = np.array([0, 0])
+            max_bound = np.array([h, w])-1
+
+            # pick one sigma
+            s = self.rng.choice(self.noise_sigma)
+
+            for t in range(self.n_steps-1):
+                
+                #compute pertubation
+                pert = self.rng.normal(0, s, points[:, t].shape)
+
+                points[:, t+1] = np.clip(
+                    points[:, t] + flows[:, t] + pert,
+                    min=min_bound, max=max_bound
+                )
+                flows[:, t+1] = grid_flow.query_multiple_labels_threaded(
+                    pos=points[:, t],
+                    labels=pts_labels
+                )
+
+            if self.weight_by_location:
+                # we count how many times each pixel is sampled
+                # and weight points by the inverse pixel count
+                points_int = points.astype(int)
+                _, u_inverse, u_counts = np.unique(
+                    points_int.reshape((-1, 2)), axis=0,
+                    return_counts=True, return_inverse=True)
+                weights = 1 / \
+                    u_counts[u_inverse].reshape((self.n_samples, self.n_steps))
+                weights /= weights.sum()
+            else:
+                weights = np.ones((self.n_samples, self.n_steps)) / \
+                    (self.n_samples * self.n_steps)
+                weights /= weights.sum()
         else:
-            weights = np.ones((self.n_samples, self.n_steps)) / \
-                (self.n_samples * self.n_steps)
-            weights /= weights.sum()
+            points = np.zeros((0,2,2))
+            flows = np.zeros((0,2,2))
+            weights = np.zeros((0,2,))
 
         points = torch.from_numpy(points).float()
         flows = torch.from_numpy(flows).float()
