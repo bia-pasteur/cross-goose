@@ -357,7 +357,7 @@ class GridFlow:
         )
 
     def pad(self, padding: Tuple[int, int, int, int]) -> Self:
-        offset = np.array([[padding[0], padding[2]]])
+        offset = np.array([[padding[2], padding[0]]])
         return GridFlow(
             points={k: offset + v.data for k, v in self.points.items()},
             flows=self.flows,
