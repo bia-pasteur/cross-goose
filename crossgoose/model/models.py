@@ -269,7 +269,8 @@ class CrossGooseModel(lightning.LightningModule):
         # get points
         pts_coord = batch['pts_coord']
         pts_flows = batch['pts_flows']
-        pts_weights = batch['pts_weights']
+        pts_weights = batch['pts_weights'] / batch_size
+        # weights are normalized per image, so we divide by batch_size
         pts_batch = batch['pts_batch']
 
         if self.train_on_trajectories:
@@ -297,7 +298,7 @@ class CrossGooseModel(lightning.LightningModule):
 
             error = torch.mean(self.criterion_flow(
                 flow_est, self.flow_fac * pts_flows), dim=-1)  # reduce on spatial dim
-            
+
             error = error * pts_weights
 
             if self.time_error_weighting:

@@ -10,7 +10,7 @@ trainer:
     class_path: lightning.pytorch.loggers.TensorBoardLogger
     init_args:
       save_dir: model_logs
-      name: model_test
+      name: model_v1.3.3_rsv2_cp
   callbacks:
   - class_path: lightning.pytorch.callbacks.ModelCheckpoint
     init_args:
@@ -60,7 +60,7 @@ model:
   shared_embedding: false
   train_on_trajectories: false
 data:
-  data_root: /home/jmabon/Documents/Data/
+  data_root: ../data
   dataset: Cellpose_data_wval
   batch_size: 4
   num_workers: 12
