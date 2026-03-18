@@ -80,7 +80,7 @@ data:
   recompute_flows: false
   closure_radius: 8
   center_method: graph_center_weighted
-  bootstrap_factor: 8
+  bootstrap_factor: 1
   prefetch_factor: 4
   lazy_flow_computing: false
   return_overlap_map: false

@@ -329,7 +329,7 @@ class CrossGooseModel(lightning.LightningModule):
 
             error = torch.mean(self.criterion_flow(
                 flow_est, self.flow_fac * flow_gt), dim=-1)  # reduce on spatial dim
-            error = error * pts_weights
+            error = error * pts_weights[:, 1]
 
             loss_steps = torch.sum(error)
 
