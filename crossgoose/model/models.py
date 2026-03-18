@@ -72,7 +72,7 @@ class CrossGooseModel(lightning.LightningModule):
             sz=1
         )
 
-        self.criterion_flow = nn.MSELoss('none')
+        self.criterion_flow = nn.MSELoss(reduction='none')
         self.criterion_cellprob = nn.BCEWithLogitsLoss(reduction="mean")
 
         self.flow_fac = 5.
@@ -333,7 +333,8 @@ class CrossGooseModel(lightning.LightningModule):
 
             loss_steps = torch.sum(error)
 
-        loss_dict['loss_steps'] = loss_steps
+        loss_dict['loss_steps'] = loss_steps / 2
+        # CP3 has loss= 0.5 * MSE(flow,5*gt_flow) + BCE(mask,gt_mask)
         loss_dict['loss'] += loss_dict['loss_steps']
 
         self.log_dict(
