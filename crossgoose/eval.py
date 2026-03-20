@@ -28,7 +28,7 @@ def _eval_model(
         subset: str,
         ckpt_crit: Ckptcriterion,
         image_normalization: ImageNormalization,
-        thresholds:List[float]
+        thresholds: List[float]
 ):
     model = CrossGooseModel.load_model(model_path, ckpt_crit=ckpt_crit)
     model = model.to('cuda')
@@ -41,7 +41,8 @@ def _eval_model(
 
     dataset_name = os.path.split(dataset)[-1]
 
-    results_dir = os.path.join(results_dir, dataset_name, subset, model_name)
+    results_dir = os.path.join(
+        results_dir, dataset_name, subset, model_name + '-' + ckpt_crit)
     os.makedirs(results_dir, exist_ok=True)
 
     # load images
@@ -89,7 +90,7 @@ def _eval_model(
         save_masks(
             results['mask'],
             os.path.join(results_dir, img_name + '_pred_mask.tif'),
-            format=SaveFormat.IMAGEJ
+            format=SaveFormat.OME
         )
         tifffile.imwrite(
             os.path.join(results_dir, img_name + '_pred_cellprob.tif'),

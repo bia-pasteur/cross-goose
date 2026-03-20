@@ -14,25 +14,24 @@ trainer:
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
+        filename: best-{epoch}-{step}
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
         filename: best-{epoch}-{step}-{val_ap_0.75:.4f}
         monitor: val_ap_0.75
-        save_last: true
         save_top_k: 1
         mode: max
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
         filename: best-{epoch}-{step}-{val_ap_0.9:.4f}
         monitor: val_ap_0.9
-        save_last: false
         save_top_k: 1
         mode: max
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
         filename: best-{epoch}-{step}-{val_ap_0.5:.4f}
         monitor: val_ap_0.5
-        verbose: false
-        save_last: false
-        save_top_k: 2
+        save_top_k: 1
         mode: max
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
       init_args:
