@@ -104,6 +104,8 @@ class FlowDataset(Dataset):
         self.n_images = len(self.images_files)
 
         if self.keep_data_in_memory:
+            raise NotImplementedError("Inplace modifications of gridflow interfere with "
+                                      "the buffer if  keep_data_in_memory=True")
             self.buffer = {}
         else:
             self.buffer = None
@@ -151,6 +153,8 @@ class FlowDataset(Dataset):
     def _get_raw_item(self, index):
         if self.keep_data_in_memory and index in self.buffer:
             data = self.buffer[index]
+            # TODO make a copy
+            # data['flows'] = copy.deepcopy(data['flows'])
         else:
             data = {}
             image = imread(os.path.join(

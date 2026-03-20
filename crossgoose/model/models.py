@@ -247,24 +247,33 @@ class CrossGooseModel(lightning.LightningModule):
         return torch.from_numpy(flows).to(ut.device).float()
 
     def training_step(self, batch, batch_idx):
+        batch_size = batch['image'].shape[0]
+        loss_dict = self.compute_loss(batch)
+        self.log_dict(
+            loss_dict, prog_bar=True,
+            logger=True, on_step=False, on_epoch=True,
+            batch_size=batch_size
+        )
+        return loss_dict['loss']
 
+    def compute_loss(self, batch, log_prefix: str = ''):
         labels: torch.Tensor = batch['labels']
         image: torch.Tensor = torch.tile(batch['image'], (1, 2, 1, 1))
 
         batch_size = image.shape[0]
 
-        loss_dict = {'loss': 0.0}
+        loss_dict = {f'{log_prefix}loss': 0.0}
 
         features = self.image_to_maps(image, apply_sigmoids=False)
         emb_grid_0 = features['emb_grid_0']
         emb_grid_t = features['emb_grid_t']
 
         cell_gt = (labels > 0).float()
-        loss_dict['loss_cp'] = self.criterion_cellprob(
+        loss_dict[f'{log_prefix}loss_cp'] = self.criterion_cellprob(
             features['cp_est'], cell_gt
         ) * self.crit_cellprob_weight
 
-        loss_dict['loss'] += loss_dict['loss_cp']
+        loss_dict[f'{log_prefix}loss'] += loss_dict[f'{log_prefix}loss_cp']
 
         # get points
         pts_coord = batch['pts_coord']
@@ -333,19 +342,20 @@ class CrossGooseModel(lightning.LightningModule):
 
             loss_steps = torch.sum(error)
 
-        loss_dict['loss_steps'] = loss_steps / 2
+        loss_dict[f'{log_prefix}loss_steps'] = loss_steps / 2
         # CP3 has loss= 0.5 * MSE(flow,5*gt_flow) + BCE(mask,gt_mask)
-        loss_dict['loss'] += loss_dict['loss_steps']
+        loss_dict[f'{log_prefix}loss'] += loss_dict[f'{log_prefix}loss_steps']
 
-        self.log_dict(
-            loss_dict, prog_bar=True,
-            logger=True, on_step=False, on_epoch=True,
-            batch_size=batch_size
-        )
-
-        return loss_dict['loss']
+        return loss_dict
 
     def validation_step(self, batch, batch_idx):
+
+        log = {}
+
+        with torch.no_grad():
+            val_losses = self.compute_loss(batch, log_prefix='val_')
+            log.update(val_losses)
+
         images: torch.Tensor = batch['image']
         batch_size, _, h, w = images.shape
         thresholds = [0.5, 0.75, 0.9]
@@ -362,8 +372,8 @@ class CrossGooseModel(lightning.LightningModule):
             masks_pred=masks_pred,
             threshold=thresholds
         )
-        log = {f"val_ap_{t}": float(np.nanmean(ap[:, i]))
-               for i, t in enumerate(thresholds)}
+        log.update({f"val_ap_{t}": float(np.nanmean(ap[:, i]))
+                    for i, t in enumerate(thresholds)})
 
         self.log_dict(log, batch_size=batch_size, on_epoch=True)
 
