@@ -159,7 +159,8 @@ class RandomOnCellV2(PointsSamlper):
             label_points = {
                 int(k): torch.nonzero(labels == k) for k in unique_labels
             }
-            label_points_nb = {int(k): v.shape[0] for k, v in label_points.items()}
+            label_points_nb = {int(k): v.shape[0]
+                               for k, v in label_points.items()}
             max_pts = np.max(list(label_points_nb.values()))
             # we pick random integers less than the max number of px in an instance, then mod it to the actual number per instance
             pts_t_samples_idx = torch.randint(
@@ -198,9 +199,9 @@ class RandomOnCellV2(PointsSamlper):
             weights[:, 0] = 0
             weights /= weights.sum()
         else:
-            points = torch.zeros((0,2,2))
-            flows = torch.zeros((0,2,2))
-            weights = torch.zeros((0,2,))
+            points = torch.zeros((0, 2, 2))
+            flows = torch.zeros((0, 2, 2))
+            weights = torch.zeros((0, 2,))
 
         return points, flows, weights
 
@@ -211,14 +212,14 @@ class TrajectorySampler(PointsSamlper):
         n_steps: int,
         n_samples: int,
         weight_by_location: bool,
-        noise_sigma: float|list[float],
+        noise_sigma: float | list[float],
         seed: int = 0
     ):
         self.n_steps = n_steps
         self.n_samples = n_samples
         self.weight_by_location = weight_by_location
-        
-        if isinstance(noise_sigma,float):
+
+        if isinstance(noise_sigma, float):
             self.noise_sigma = [noise_sigma]
         else:
             self.noise_sigma = noise_sigma
@@ -266,8 +267,8 @@ class TrajectorySampler(PointsSamlper):
             s = self.rng.choice(self.noise_sigma)
 
             for t in range(self.n_steps-1):
-                
-                #compute pertubation
+
+                # compute pertubation
                 pert = self.rng.normal(0, s, points[:, t].shape)
 
                 points[:, t+1] = np.clip(
@@ -294,9 +295,9 @@ class TrajectorySampler(PointsSamlper):
                     (self.n_samples * self.n_steps)
                 weights /= weights.sum()
         else:
-            points = np.zeros((0,2,2))
-            flows = np.zeros((0,2,2))
-            weights = np.zeros((0,2,))
+            points = np.zeros((0, self.n_steps, 2))
+            flows = np.zeros((0, self.n_steps, 2))
+            weights = np.zeros((0, self.n_steps,))
 
         points = torch.from_numpy(points).float()
         flows = torch.from_numpy(flows).float()
