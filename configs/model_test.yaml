@@ -1,5 +1,5 @@
 # lightning.pytorch==2.5.5
-seed_everything: 16
+seed_everything: 1
 trainer:
   accelerator: auto
   strategy: auto
@@ -44,11 +44,14 @@ trainer:
   enable_progress_bar: true
 model:
   flow_fn:
-    class_path: crossgoose.model.flow_function.CPLike
+    class_path: crossgoose.model.flow_function.FlowLinear
     init_args:
-      embedding_dim: 8
+      embedding_dim: 16
+      hidden_dims:
+        - 16
+        - 8
       value_dim: 2
-  embeddings_dim: 8
+  embeddings_dim: 16
   crit_flow_weight: 0.5
   crit_cellprob_weight: 1.0
   n_steps: 200
@@ -56,8 +59,8 @@ model:
   shared_embedding: true
   train_on_trajectories: false
 data:
-  data_root: /home/jmabon/Documents/Data/
-  dataset: Cellpose_data_wval
+  data_root: data
+  dataset: Dataset_v02+cp
   batch_size: 8
   num_workers: 12
   validation: true
