@@ -80,3 +80,33 @@ class FlowLinear(FlowFunction):
         e0et = torch.concat([e0, et], dim=-1)
 
         return self.transform(e0et)
+
+
+class CPLike(FlowFunction):
+    def __init__(
+        self,
+        embedding_dim: int,
+        value_dim: int = 2,
+    ):
+        super().__init__()
+        self.embedding_dim = embedding_dim
+
+        all_dims = [value_dim]
+        modules = []
+        last_dim = embedding_dim
+        for dim in all_dims:
+            modules.append(
+                linblock(
+                    in_channels=last_dim,
+                    out_channels=dim
+                ))
+            last_dim = dim
+
+        self.transform = nn.Sequential(
+            *modules
+        )
+
+    def forward(self, e0, et):
+        # n, f = e0.shape
+        # assert tuple(et.shape) == (n, f)
+        return self.transform(et)

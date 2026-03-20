@@ -342,7 +342,7 @@ class CrossGooseModel(lightning.LightningModule):
 
             loss_steps = torch.sum(error)
 
-        loss_dict[f'{log_prefix}loss_steps'] = loss_steps / 2
+        loss_dict[f'{log_prefix}loss_steps'] = loss_steps * self.crit_flow_weight
         # CP3 has loss= 0.5 * MSE(flow,5*gt_flow) + BCE(mask,gt_mask)
         loss_dict[f'{log_prefix}loss'] += loss_dict[f'{log_prefix}loss_steps']
 

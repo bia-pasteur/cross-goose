@@ -10,7 +10,7 @@ trainer:
     class_path: lightning.pytorch.loggers.TensorBoardLogger
     init_args:
       save_dir: model_logs
-      name: model_v1.3.3_rsv2_cp
+      name: model_v1.3.4_cplike_rsv2_cp
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
@@ -44,19 +44,16 @@ trainer:
   enable_progress_bar: true
 model:
   flow_fn:
-    class_path: crossgoose.model.flow_function.FlowLinear
+    class_path: crossgoose.model.flow_function.CPLike
     init_args:
-      embedding_dim: 8
-      hidden_dims:
-        - 16
-        - 8
+      embedding_dim: 16
       value_dim: 2
-  embeddings_dim: 8
-  crit_flow_weight: 0.1
-  crit_cellprob_weight: 2.0
+  embeddings_dim: 16
+  crit_flow_weight: 0.5
+  crit_cellprob_weight: 1.0
   n_steps: 200
-  backbone_realease_delay: null
-  shared_embedding: false
+  backbone_realease_delay: 4
+  shared_embedding: true
   train_on_trajectories: false
 data:
   data_root: ../data
