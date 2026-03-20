@@ -1,0 +1,109 @@
+# lightning.pytorch==2.5.5
+seed_everything: 16
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  precision: null
+  logger:
+    class_path: lightning.pytorch.loggers.TensorBoardLogger
+    init_args:
+      save_dir: model_logs
+      name: model_v1.3.4_traj_cp
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        filename: last-{epoch}-{step}
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        filename: best-{epoch}-{step}-{val_ap_0.75:.4f}
+        monitor: val_ap_0.75
+        save_top_k: 1
+        mode: max
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        filename: best-{epoch}-{step}-{val_ap_0.9:.4f}
+        monitor: val_ap_0.9
+        save_top_k: 1
+        mode: max
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        filename: best-{epoch}-{step}-{val_ap_0.5:.4f}
+        monitor: val_ap_0.5
+        save_top_k: 1
+        mode: max
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: epoch
+        log_momentum: false
+        log_weight_decay: false
+  max_time: 00:12:00:00
+  check_val_every_n_epoch: 1
+  log_every_n_steps: 10
+  enable_progress_bar: true
+model:
+  flow_fn:
+    class_path: crossgoose.model.flow_function.FlowLinear
+    init_args:
+      embedding_dim: 16
+      hidden_dims:
+        - 16
+        - 8
+      value_dim: 2
+  embeddings_dim: 16
+  crit_flow_weight: 0.5
+  crit_cellprob_weight: 1.0
+  n_steps: 200
+  backbone_realease_delay: 4
+  shared_embedding: true
+  train_on_trajectories: true
+data:
+  data_root: ../data
+  dataset: Cellpose_data_wval
+  batch_size: 8
+  num_workers: 12
+  validation: true
+  augmentation_params:
+    patch_size: 224
+    flip_h: true
+    flip_v: true
+    rotate: true
+    scale_range: [0.8, 1.2]
+    rot90: false
+  points_sampler:
+    class_path: crossgoose.data.points_sampling.TrajectorySampler
+    init_args:
+      n_samples: 100
+      n_steps: 100
+      noise_sigma: [0, 0.1, 0.2]
+      weight_by_location: true
+  recompute_flows: false
+  closure_radius: 8
+  center_method: graph_center_weighted
+  bootstrap_factor: 1
+  prefetch_factor: 4
+  lazy_flow_computing: false
+  return_overlap_map: false
+  keep_data_in_memory: false
+  val_batch_size: 2
+  val_patch_size: 512
+  image_normalization: M1P1
+  gridflow_n_interpol: 11
+optimizer:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 0.005
+    betas:
+      - 0.9
+      - 0.999
+    eps: 1.0e-08
+    weight_decay: 1.0e-5
+    amsgrad: false
+    maximize: false
+    foreach: null
+    capturable: false
+    differentiable: false
+    fused: null
+lr_scheduler: null
+ckpt_path: null
