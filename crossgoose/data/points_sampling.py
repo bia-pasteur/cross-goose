@@ -140,7 +140,7 @@ class RandomOnCellV2(PointsSamlper):
         labels: Tensor,
         grid_flow: GridFlow
     ):
-        h, w = image.shape
+        _, h, w = image.shape
 
         # get all non zero labels
         pts_init = torch.nonzero(labels)
@@ -232,7 +232,7 @@ class TrajectorySampler(PointsSamlper):
         labels: Tensor,
         grid_flow: GridFlow
     ):
-        h, w = image.shape
+        _, h, w = image.shape
 
         # get all non zero labels
         pts_init = torch.nonzero(labels)

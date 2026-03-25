@@ -214,6 +214,8 @@ class CrossGooseModel(lightning.LightningModule):
 
         if c == 1:
             image = torch.tile(image, (1, 2, 1, 1))
+        elif c >= 2:
+            image = image[:, :2]
 
         features = self.image_to_maps(image, apply_sigmoids=True)
         emb_grid_0 = features['emb_grid_0']
@@ -258,7 +260,13 @@ class CrossGooseModel(lightning.LightningModule):
 
     def compute_loss(self, batch, log_prefix: str = ''):
         labels: torch.Tensor = batch['labels']
-        image: torch.Tensor = torch.tile(batch['image'], (1, 2, 1, 1))
+        nchan = batch['image'].shape[1]
+        if nchan == 1:
+            image: torch.Tensor = torch.tile(batch['image'], (1, 2, 1, 1))
+        elif nchan >= 2:
+            image: torch.Tensor = batch['image'][:, :2]
+        else:
+            raise ValueError(nchan)
 
         batch_size = image.shape[0]
 
@@ -342,7 +350,8 @@ class CrossGooseModel(lightning.LightningModule):
 
             loss_steps = torch.sum(error)
 
-        loss_dict[f'{log_prefix}loss_steps'] = loss_steps * self.crit_flow_weight
+        loss_dict[f'{log_prefix}loss_steps'] = loss_steps * \
+            self.crit_flow_weight
         # CP3 has loss= 0.5 * MSE(flow,5*gt_flow) + BCE(mask,gt_mask)
         loss_dict[f'{log_prefix}loss'] += loss_dict[f'{log_prefix}loss_steps']
 
@@ -393,6 +402,10 @@ class CrossGooseModel(lightning.LightningModule):
         _, c, h, w = image.shape
         if c == 1:
             image = torch.tile(image, (1, 2, 1, 1))
+        elif c >= 2:
+            image = image[:, :2]
+        else:
+            raise ValueError(c)
 
         features = self.image_to_maps(image, apply_sigmoids=True)
         emb_grid_t = features['emb_grid_t']
@@ -444,10 +457,9 @@ class CrossGooseModel(lightning.LightningModule):
         self,
         image: torch.Tensor
     ):
-        assert len(image.shape) == 4, "expects grayscale images (for now)"
+        assert len(image.shape) == 4
         b, c, h, w = image.shape
         assert b == 1
-        assert c in [1, 2]
 
         timings = {}
         results = {}

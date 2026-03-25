@@ -62,7 +62,7 @@ data:
   data_root: data
   dataset: Dataset_v02+cp
   batch_size: 8
-  num_workers: 12
+  num_workers: 21
   validation: true
   augmentation_params:
     patch_size: 224
@@ -88,6 +88,7 @@ data:
   val_patch_size: 512
   image_normalization: M1P1
   gridflow_n_interpol: 11
+  grayscale: false
 optimizer:
   class_path: torch.optim.AdamW
   init_args:

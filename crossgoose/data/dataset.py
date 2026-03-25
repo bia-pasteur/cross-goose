@@ -39,6 +39,7 @@ class FlowDataset(Dataset):
             keep_data_in_memory: bool = False,
             image_normalization: ImageNormalization = 'M1P1',
             gridflow_n_interpol: int = 21,
+            grayscale: bool = True
 
     ):
         self.aug_params = augmentation_params
@@ -51,6 +52,7 @@ class FlowDataset(Dataset):
         self.keep_data_in_memory = keep_data_in_memory
         self.image_normalization = image_normalization
         self.gridflow_n_interpol = gridflow_n_interpol
+        self.grayscale = grayscale
 
         self.name = f"{os.path.split(data_dir)[-1]}-{subset}"
 
@@ -152,6 +154,7 @@ class FlowDataset(Dataset):
 
     def _get_raw_item(self, index):
         if self.keep_data_in_memory and index in self.buffer:
+            raise NotImplementedError
             data = self.buffer[index]
             # TODO make a copy
             # data['flows'] = copy.deepcopy(data['flows'])
@@ -161,9 +164,19 @@ class FlowDataset(Dataset):
                 self.directory, self.images_files[index]))
             if len(image.shape) == 3:
                 chan_dim = np.argmin(image.shape)
-                image = np.mean(image, axis=chan_dim)
+                assert chan_dim == 2, chan_dim
+                if self.grayscale:
+                    image = np.mean(image, axis=chan_dim, keepdims=True)
+                else:
+                    if image.shape[2] == 1:
+                        image = np.tile(image, (1, 1, 3))
+            elif len(image.shape) == 2:
+                image = np.expand_dims(image, axis=-1)
+                if not self.grayscale:
+                    image = np.tile(image, (1, 1, 3))
+
             image = self.norm_image(image)
-            data['image'] = torch.tensor(image)
+            data['image'] = torch.tensor(image).permute(2, 0, 1)
 
             labels = imread(os.path.join(
                 self.directory, self.masks_files[index]))
@@ -245,7 +258,7 @@ class FlowDataset(Dataset):
         pts_batch = torch.zeros((n_samples, 1), dtype=int)
 
         ret = {
-            'image': image.unsqueeze(dim=0).float(),
+            'image': image.float(),
             'labels': labels,
             'pts_coord': pts_coord,
             'pts_flows': pts_flows,
@@ -322,7 +335,8 @@ class FlowDataModule(lightning.LightningDataModule):
             val_batch_size: int | None = None,
             val_patch_size: int | None = None,
             image_normalization: ImageNormalization = 'M1P1',
-            gridflow_n_interpol: int = 21
+            gridflow_n_interpol: int = 21,
+            grayscale: bool = True
     ):
         super().__init__()
         data_dir = os.path.join(data_root, dataset)
@@ -347,7 +361,8 @@ class FlowDataModule(lightning.LightningDataModule):
             return_overlap_map=return_overlap_map,
             keep_data_in_memory=keep_data_in_memory,
             image_normalization=image_normalization,
-            gridflow_n_interpol=gridflow_n_interpol
+            gridflow_n_interpol=gridflow_n_interpol,
+            grayscale=grayscale
         )
         self.dataset_params_val = dict(
             augmentation_params=AugmentationParams(
@@ -369,7 +384,8 @@ class FlowDataModule(lightning.LightningDataModule):
             return_overlap_map=return_overlap_map,
             keep_data_in_memory=keep_data_in_memory,
             image_normalization=image_normalization,
-            gridflow_n_interpol=gridflow_n_interpol
+            gridflow_n_interpol=gridflow_n_interpol,
+            grayscale=grayscale
         )
 
     def setup(self, stage):
