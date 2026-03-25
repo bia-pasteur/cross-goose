@@ -65,11 +65,6 @@ class FlowDataset(Dataset):
 
         assert len(self.images_files) > 0
         assert len(self.images_files) == len(self.masks_files)
-        if not len(self.images_files) == len(self.masks_onehot_files):
-            print(f"[{self.name}] missing onehot masks")
-            self.use_onehot = False
-        else:
-            self.use_onehot = True
 
         self.flow_files = []
         desc = f"[{self.name}] " + f"checking flows for {subset} data"
@@ -118,10 +113,27 @@ class FlowDataset(Dataset):
 
         self.images_files = natsorted(
             [f for f in dir_file if re.search(r'.*\_img\.(tif|png)', f)])
-        self.masks_files = natsorted(
-            [f for f in dir_file if re.search(r'.*\_masks\.(tif|png)', f)])
-        self.masks_onehot_files = natsorted(
-            [f for f in dir_file if re.search(r'.*\_masks_onehot\.(tif|png)', f)])
+        self.masks_files = []
+        self.masks_onehot_files = []
+        for img_file in self.images_files:
+            name = re.match(r'(.*)\_img\.(tif|png)', img_file)
+            assert name is not None
+            name = name.group(1)
+            mask_pattern = re.compile(
+                re.escape(name) + r'\_masks\.(tif|png)')
+            oh_mask_pattern = re.compile(
+                re.escape(name) + r'\_masks_onehot\.(tif|png)')
+            mask_file = None
+            masks_onehot_file = None
+            for f in dir_file:
+                if mask_pattern.match(f):
+                    mask_file = f
+                if oh_mask_pattern.match(f):
+                    masks_onehot_file = f
+
+            assert mask_file is not None, name
+            self.masks_files.append(mask_file)
+            self.masks_onehot_files.append(masks_onehot_file)
 
     def compute_flow(
         self,
@@ -129,7 +141,8 @@ class FlowDataset(Dataset):
         image_index: int,
         center_method: str
     ) -> str:
-        if self.use_onehot:
+        use_onehot = self.masks_onehot_files[image_index] is not None
+        if use_onehot:
             labels_one_hot = imread(os.path.join(
                 self.directory, self.masks_onehot_files[image_index]))
             gf = GridFlow.from_one_hot(

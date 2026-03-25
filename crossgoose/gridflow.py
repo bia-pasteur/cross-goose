@@ -43,6 +43,16 @@ def _single_mask_to_flow(
     return mu
 
 
+def keep_largest_component(
+        mask: np.ndarray
+) -> np.ndarray:
+    labels = skimage.measure.label(mask)
+    unique_labels, counts_labels = np.unique(
+        labels[mask > 0], return_counts=True)
+    max_label = unique_labels[np.argmax(counts_labels)]
+    return labels == max_label
+
+
 def _mask_to_pts_and_flw(
     mask: np.ndarray,
     flow_center_method: CenterMethod,
@@ -52,7 +62,7 @@ def _mask_to_pts_and_flw(
 ):
     mask_size = np.sum(mask)
     assert mask_size > 0
-    assert len(mask.shape) == 2
+    assert len(mask.shape) == 2, mask.shape
     # compute classical cp flow
     # first get the local mask
     slices = find_objects(mask.astype(int))
@@ -63,6 +73,8 @@ def _mask_to_pts_and_flw(
     offset = np.array([offest_i, offset_j]) - padding
 
     mask_local = np.pad(mask[slice_k], pad_width=padding)
+    # keep largest component to avoid unconnected components
+    mask_local = keep_largest_component(mask_local)
     mask_local_dil = skimage.morphology.isotropic_dilation(
         mask_local, radius=1)
 
@@ -142,11 +154,11 @@ class GridFlow:
         points: Dict[str, KDTree] = {}
         flows: Dict[str, np.ndarray] = {}
 
-        non_zero_labels = np.nonzero(np.sum(labels_one_hot, axis=(1, 2)))
+        non_zero_labels = np.nonzero(np.sum(labels_one_hot, axis=(1, 2)))[0]
 
         for k in non_zero_labels:
             mask = labels_one_hot[k]
-
+            assert len(mask.shape) == 2, k
             pts, flw = _mask_to_pts_and_flw(
                 mask=mask,
                 flow_center_method=flow_center_method,
@@ -292,13 +304,14 @@ class GridFlow:
             raise KeyError(
                 f"label {label} not in Gridflow with labels {self.points.keys()}")
 
-        n_pts_max =  self.points[label].n
-        ninterpol = min(self.n_interpol,self.points[label].n)
+        n_pts_max = self.points[label].n
+        ninterpol = min(self.n_interpol, self.points[label].n)
         distance, nearest_vertex = self.points[label].query(
             pos, k=ninterpol)
         # warning missing neighbors are insicated with n_pts_max
         valid_pts = nearest_vertex < n_pts_max
-        assert np.all(valid_pts), f"{pos.shape=}, {self.points[label].data.shape=}, , {self.n_interpol=}"
+        assert np.all(
+            valid_pts), f"{pos.shape=}, {self.points[label].data.shape=}, , {self.n_interpol=}"
 
         try:
             vec = self.flows[label][nearest_vertex]
