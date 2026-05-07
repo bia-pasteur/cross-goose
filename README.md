@@ -1,5 +1,7 @@
 # <img src="goose-logo-rd.png" width="50" height="50" valign="middle"/> Cross-GOOSe
 
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-blue)]() [![PyTorch 2.4+](https://img.shields.io/badge/PyTorch-2.4+-ee4c2c?logo=pytorch)]() [![Lightning](https://img.shields.io/badge/Lightning-792ee5)]() [![HAL](https://img.shields.io/badge/HAL-hal--05614392-blue)](https://hal.science/hal-05614392) [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+
 _**Cross**ing **G**radient-flows for **O**verlapping **O**bjects **Se**gmentation_
 
 Implementation of _Improving Gradient Flow methods for instance segmentation of crossing objects_ by J. Mabon & J.C. Olivo-Marin, submitted to ISBI 2026.
