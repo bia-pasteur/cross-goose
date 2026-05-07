@@ -18,7 +18,8 @@ from crossgoose.data.data_augment import AugmentationParams, random_transform
 from crossgoose.data.points_sampling import PointsSamlper
 from crossgoose.gridflow import BatchGridFlow, GridFlow
 from crossgoose.mask_utils import convert_labels_to_onehot
-from crossgoose.utils import ImageNormalization, default, imread, normalize_image
+from crossgoose.utils import (ImageNormalization, default, imread,
+                              normalize_image)
 
 
 class FlowDataset(Dataset):
@@ -38,6 +39,7 @@ class FlowDataset(Dataset):
             keep_data_in_memory: bool = False,
             image_normalization: ImageNormalization = 'M1P1',
             gridflow_n_interpol: int = 21,
+            grayscale: bool = True
 
     ):
         self.aug_params = augmentation_params
@@ -50,6 +52,7 @@ class FlowDataset(Dataset):
         self.keep_data_in_memory = keep_data_in_memory
         self.image_normalization = image_normalization
         self.gridflow_n_interpol = gridflow_n_interpol
+        self.grayscale = grayscale
 
         self.name = f"{os.path.split(data_dir)[-1]}-{subset}"
 
@@ -62,12 +65,6 @@ class FlowDataset(Dataset):
 
         assert len(self.images_files) > 0
         assert len(self.images_files) == len(self.masks_files)
-        if not len(self.images_files) == len(self.masks_onehot_files):
-            print(f"[{self.name}] missing onehot masks: generating ...")
-            self.generate_one_hot_masks()
-            self._fetch_files()
-            assert len(self.images_files) == len(
-                self.masks_onehot_files), (self.images_files, self.masks_onehot_files)
 
         self.flow_files = []
         desc = f"[{self.name}] " + f"checking flows for {subset} data"
@@ -104,6 +101,8 @@ class FlowDataset(Dataset):
         self.n_images = len(self.images_files)
 
         if self.keep_data_in_memory:
+            raise NotImplementedError("Inplace modifications of gridflow interfere with "
+                                      "the buffer if  keep_data_in_memory=True")
             self.buffer = {}
         else:
             self.buffer = None
@@ -114,27 +113,27 @@ class FlowDataset(Dataset):
 
         self.images_files = natsorted(
             [f for f in dir_file if re.search(r'.*\_img\.(tif|png)', f)])
-        self.masks_files = natsorted(
-            [f for f in dir_file if re.search(r'.*\_masks\.(tif|png)', f)])
-        self.masks_onehot_files = natsorted(
-            [f for f in dir_file if re.search(r'.*\_masks_onehot\.(tif|png)', f)])
+        self.masks_files = []
+        self.masks_onehot_files = []
+        for img_file in self.images_files:
+            name = re.match(r'(.*)\_img\.(tif|png)', img_file)
+            assert name is not None
+            name = name.group(1)
+            mask_pattern = re.compile(
+                re.escape(name) + r'\_masks\.(tif|png)')
+            oh_mask_pattern = re.compile(
+                re.escape(name) + r'\_masks_onehot\.(tif|png)')
+            mask_file = None
+            masks_onehot_file = None
+            for f in dir_file:
+                if mask_pattern.match(f):
+                    mask_file = f
+                if oh_mask_pattern.match(f):
+                    masks_onehot_file = f
 
-    def generate_one_hot_masks(self):
-        for masks_file in tqdm(self.masks_files, desc=f'computing onehot masks for {self.name}'):
-            name, _ = masks_file.split('.')
-            file = os.path.join(self.directory, f"{name}_onehot.tif")
-            if not os.path.exists(file):
-                labels = imread(os.path.join(
-                    self.directory, masks_file))
-                mask_onehot = convert_labels_to_onehot(
-                    labels, closure_radius=self.closure_radius)
-
-                tifffile.imwrite(
-                    file,
-                    data=mask_onehot,
-                    compression='zlib',
-                    metadata={'axes': 'ZYX'},
-                )
+            assert mask_file is not None, name
+            self.masks_files.append(mask_file)
+            self.masks_onehot_files.append(masks_onehot_file)
 
     def compute_flow(
         self,
@@ -142,14 +141,23 @@ class FlowDataset(Dataset):
         image_index: int,
         center_method: str
     ) -> str:
-
-        labels_one_hot = imread(os.path.join(
-            self.directory, self.masks_onehot_files[image_index]))
-        gf = GridFlow.from_one_hot(
-            labels_one_hot=labels_one_hot,
-            n_interpol=1,
-            flow_center_method=center_method
-        )
+        use_onehot = self.masks_onehot_files[image_index] is not None
+        if use_onehot:
+            labels_one_hot = imread(os.path.join(
+                self.directory, self.masks_onehot_files[image_index]))
+            gf = GridFlow.from_one_hot(
+                labels_one_hot=labels_one_hot,
+                n_interpol=1,
+                flow_center_method=center_method
+            )
+        else:
+            labels = imread(os.path.join(
+                self.directory, self.masks_files[image_index]))
+            gf = GridFlow.from_labels(
+                labels=labels,
+                n_interpol=1,
+                flow_center_method=center_method
+            )
         gf.to_file(flow_file_path)
 
         return flow_file_path
@@ -159,16 +167,29 @@ class FlowDataset(Dataset):
 
     def _get_raw_item(self, index):
         if self.keep_data_in_memory and index in self.buffer:
+            raise NotImplementedError
             data = self.buffer[index]
+            # TODO make a copy
+            # data['flows'] = copy.deepcopy(data['flows'])
         else:
             data = {}
             image = imread(os.path.join(
                 self.directory, self.images_files[index]))
             if len(image.shape) == 3:
                 chan_dim = np.argmin(image.shape)
-                image = np.mean(image, axis=chan_dim)
+                assert chan_dim == 2, chan_dim
+                if self.grayscale:
+                    image = np.mean(image, axis=chan_dim, keepdims=True)
+                else:
+                    if image.shape[2] == 1:
+                        image = np.tile(image, (1, 1, 3))
+            elif len(image.shape) == 2:
+                image = np.expand_dims(image, axis=-1)
+                if not self.grayscale:
+                    image = np.tile(image, (1, 1, 3))
+
             image = self.norm_image(image)
-            data['image'] = torch.tensor(image)
+            data['image'] = torch.tensor(image).permute(2, 0, 1)
 
             labels = imread(os.path.join(
                 self.directory, self.masks_files[index]))
@@ -233,21 +254,32 @@ class FlowDataset(Dataset):
         )
 
         # sample u0, ut, flows
-        u0, ut, flow_u0_ut = self.points_sampler.sample(
+        # returns points and flows of shape (N,T,2), mask of shape (N,T)
+        # for simple u0,ut T=2
+        pts_coord, pts_flows, pts_weights = self.points_sampler.sample(
             image=image,
             labels=labels,
             grid_flow=grid_flow
         )
+        # sanity checks
+        assert pts_coord.shape[2] == 2
+        assert pts_coord.shape == pts_flows.shape
+        assert pts_weights.shape == pts_coord.shape[:2]
+        n_samples = pts_coord.shape[0]
+
+        # store batch ids to recover in batch collate
+        pts_batch = torch.zeros((n_samples, 1), dtype=int)
 
         ret = {
-            'image': image.unsqueeze(dim=0).float(),
+            'image': image.float(),
             'labels': labels,
+            'pts_coord': pts_coord,
+            'pts_flows': pts_flows,
+            'pts_weights': pts_weights,
+            'pts_batch': pts_batch,
             'flowgrid': grid_flow,
             'source': self.images_files[index],
             'transforms': transforms,
-            'u0': u0,
-            'ut': ut,
-            'flow_u0_ut': flow_u0_ut
         }
         if self.return_overlap_map:
             ret['overlap_mask'] = overlap_mask
@@ -263,20 +295,12 @@ def flow_data_collate_fn(batch):
                 clone[key] = BatchGridFlow([d[key] for d in batch])
             elif key == 'transforms':
                 clone[key] = [d[key] for d in batch]
-            elif key in ['u0', 'ut']:
-                # prepend batch id in coordinates so that it is (b,i,j)
-                clone[key] = torch.concat([
-                    torch.concat(
-                        [torch.full(
-                            size=(d[key].shape[0], 1),
-                            fill_value=b,
-                            dtype=d[key].dtype,
-                            device=d[key].device),
-                         d[key]],
-                        axis=1)
-                    for b, d in enumerate(batch)],
-                    axis=0)
-            elif key == 'flow_u0_ut':
+            elif key == 'pts_batch':
+                # concat samples along first axis and add batch id
+                clone[key] = torch.concat(
+                    [d[key] + b for b, d in enumerate(batch)], axis=0)
+            elif 'pts_' in key:
+                # concat samples along first axis
                 clone[key] = torch.concat([d[key] for d in batch], axis=0)
             else:
                 clone[key] = default_collate([d[key] for d in batch])
@@ -324,7 +348,8 @@ class FlowDataModule(lightning.LightningDataModule):
             val_batch_size: int | None = None,
             val_patch_size: int | None = None,
             image_normalization: ImageNormalization = 'M1P1',
-            gridflow_n_interpol: int = 21
+            gridflow_n_interpol: int = 21,
+            grayscale: bool = True
     ):
         super().__init__()
         data_dir = os.path.join(data_root, dataset)
@@ -349,7 +374,8 @@ class FlowDataModule(lightning.LightningDataModule):
             return_overlap_map=return_overlap_map,
             keep_data_in_memory=keep_data_in_memory,
             image_normalization=image_normalization,
-            gridflow_n_interpol=gridflow_n_interpol
+            gridflow_n_interpol=gridflow_n_interpol,
+            grayscale=grayscale
         )
         self.dataset_params_val = dict(
             augmentation_params=AugmentationParams(
@@ -371,7 +397,8 @@ class FlowDataModule(lightning.LightningDataModule):
             return_overlap_map=return_overlap_map,
             keep_data_in_memory=keep_data_in_memory,
             image_normalization=image_normalization,
-            gridflow_n_interpol=gridflow_n_interpol
+            gridflow_n_interpol=gridflow_n_interpol,
+            grayscale=grayscale
         )
 
     def setup(self, stage):

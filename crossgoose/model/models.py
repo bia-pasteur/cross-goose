@@ -44,13 +44,17 @@ class CrossGooseModel(lightning.LightningModule):
         crit_cellprob_weight: float = 2.0,
         n_steps: int = 200,
         backbone_realease_delay: int | None = None,
-        shared_embedding: bool = False
+        shared_embedding: bool = False,
+        train_on_trajectories: bool = False,
+        time_error_weighting: bool = False
     ):
         super().__init__()
         self.n_steps = n_steps
         self.embeddings_dim = embeddings_dim
         self.backbone_realease_delay = backbone_realease_delay
         self.shared_embedding = shared_embedding
+        self.train_on_trajectories = train_on_trajectories
+        self.time_error_weighting = time_error_weighting
 
         self.backbone = CPBackbone(device=self.device)
         self.backbone_out = self.backbone.nbase[1]
@@ -68,7 +72,7 @@ class CrossGooseModel(lightning.LightningModule):
             sz=1
         )
 
-        self.criterion_flow = nn.MSELoss(reduction="mean")
+        self.criterion_flow = nn.MSELoss(reduction='none')
         self.criterion_cellprob = nn.BCEWithLogitsLoss(reduction="mean")
 
         self.flow_fac = 5.
@@ -193,8 +197,8 @@ class CrossGooseModel(lightning.LightningModule):
 
         res['emb_grid_0'] = T1[:, :self.embeddings_dim]
         if self.shared_embedding:
-            #share the embedding for u0 and ut
-            res['emb_grid_t'] = res['emb_grid_0'] 
+            # share the embedding for u0 and ut
+            res['emb_grid_t'] = res['emb_grid_0']
         else:
             res['emb_grid_t'] = T1[:, self.embeddings_dim:2*self.embeddings_dim]
         cp_est = T1[:, -1]
@@ -210,6 +214,8 @@ class CrossGooseModel(lightning.LightningModule):
 
         if c == 1:
             image = torch.tile(image, (1, 2, 1, 1))
+        elif c >= 2:
+            image = image[:, :2]
 
         features = self.image_to_maps(image, apply_sigmoids=True)
         emb_grid_0 = features['emb_grid_0']
@@ -226,9 +232,10 @@ class CrossGooseModel(lightning.LightningModule):
 
     def _gather_emb_batch(self, raster: torch.Tensor, u: torch.Tensor):
         # expects raster of shape (B,dim_emb,H,W)
-        idx0 = u[:, 0].long()
-        idx1 = u[:, 1].long()
-        idx2 = u[:, 2].long()
+        # TODO decorelate the batch id (u[:, 0]) to the other coordinates
+        idx0 = u[..., 0].long()
+        idx1 = u[..., 1].long()
+        idx2 = u[..., 2].long()
         gathered_emb = raster[idx0, :, idx1, idx2]
         return gathered_emb
 
@@ -242,48 +249,122 @@ class CrossGooseModel(lightning.LightningModule):
         return torch.from_numpy(flows).to(ut.device).float()
 
     def training_step(self, batch, batch_idx):
+        batch_size = batch['image'].shape[0]
+        loss_dict = self.compute_loss(batch)
+        self.log_dict(
+            loss_dict, prog_bar=True,
+            logger=True, on_step=False, on_epoch=True,
+            batch_size=batch_size
+        )
+        return loss_dict['loss']
 
+    def compute_loss(self, batch, log_prefix: str = ''):
         labels: torch.Tensor = batch['labels']
-        image: torch.Tensor = torch.tile(batch['image'], (1, 2, 1, 1))
+        nchan = batch['image'].shape[1]
+        if nchan == 1:
+            image: torch.Tensor = torch.tile(batch['image'], (1, 2, 1, 1))
+        elif nchan >= 2:
+            image: torch.Tensor = batch['image'][:, :2]
+        else:
+            raise ValueError(nchan)
 
         batch_size = image.shape[0]
 
-        loss_dict = {'loss': 0.0}
+        loss_dict = {f'{log_prefix}loss': 0.0}
 
         features = self.image_to_maps(image, apply_sigmoids=False)
         emb_grid_0 = features['emb_grid_0']
         emb_grid_t = features['emb_grid_t']
 
         cell_gt = (labels > 0).float()
-        loss_dict['loss_cp'] = self.criterion_cellprob(
+        loss_dict[f'{log_prefix}loss_cp'] = self.criterion_cellprob(
             features['cp_est'], cell_gt
         ) * self.crit_cellprob_weight
 
-        loss_dict['loss'] += loss_dict['loss_cp']
+        loss_dict[f'{log_prefix}loss'] += loss_dict[f'{log_prefix}loss_cp']
 
-        # get u0
-        u0 = batch['u0']
-        ut = batch['ut']
-        e0 = self._gather_emb_batch(emb_grid_0, u0)
-        et = self._gather_emb_batch(emb_grid_t, ut)
+        # get points
+        pts_coord = batch['pts_coord']
+        pts_flows = batch['pts_flows']
+        pts_weights = batch['pts_weights'] / batch_size
+        # weights are normalized per image, so we divide by batch_size
+        pts_batch = batch['pts_batch']
 
-        flow_est = self.flow_fn(e0, et)
-        flow_gt = batch['flow_u0_ut']
+        if self.train_on_trajectories:
+            if pts_coord.shape[1] == 2:
+                raise print(
+                    "WARNING: train_on_trajectories is True but dataloader "
+                    f"provided a set of points of length {pts_coord.shape[1]}==2. "
+                    "This looks like a two points sampler. "
+                    "Try changing the dataloader points_sampler.")
 
-        loss_steps = self.criterion_flow(flow_est, self.flow_fac * flow_gt)
+            u0 = torch.concat([pts_batch, pts_coord[:, 0]], axis=-1)
+            e0 = self._gather_emb_batch(emb_grid_0, u0)
 
-        loss_dict['loss_steps'] = loss_steps
-        loss_dict['loss'] += loss_dict['loss_steps']
+            n_samples, n_steps, _ = pts_coord.shape
 
-        self.log_dict(
-            loss_dict, prog_bar=True,
-            logger=True, on_step=False, on_epoch=True,
-            batch_size=batch_size
-        )
+            pts_batch = torch.tile(pts_batch[..., None], (1, n_steps, 1))
+            ut = torch.concat([pts_batch, pts_coord], axis=-1)
 
-        return loss_dict['loss']
+            et = self._gather_emb_batch(emb_grid_t, ut)
+
+            # tile e0 to et shape
+            e0 = torch.tile(e0[:, None], (1, n_steps, 1))
+
+            flow_est = self.flow_fn(e0, et)
+
+            error = torch.mean(self.criterion_flow(
+                flow_est, self.flow_fac * pts_flows), dim=-1)  # reduce on spatial dim
+
+            error = error * pts_weights
+
+            if self.time_error_weighting:
+                error_per_timeframe = torch.sum(error, dim=1, keepdim=True)
+                error_per_timeframe = error_per_timeframe / \
+                    torch.sum(error_per_timeframe)  # normalize
+                loss_steps = torch.sum(error * error_per_timeframe) / n_samples
+            else:
+                loss_steps = torch.sum(error)
+
+        else:
+            # v1.0 behaviour
+            if pts_coord.shape[1] != 2:
+                raise ValueError(
+                    "train_on_trajectories is False but dataloader "
+                    f"provided a set of points of length {pts_coord.shape[1]}!=2. "
+                    "Try changing the dataloader points_sampler.")
+
+            # concat the batch dim
+            u0 = torch.concat([pts_batch, pts_coord[:, 0]], axis=-1)
+            ut = torch.concat([pts_batch, pts_coord[:, 1]], axis=-1)
+            flow_gt = pts_flows[:, 1]
+
+            e0 = self._gather_emb_batch(emb_grid_0, u0)
+            et = self._gather_emb_batch(emb_grid_t, ut)
+
+            flow_est = self.flow_fn(e0, et)
+
+            error = torch.mean(self.criterion_flow(
+                flow_est, self.flow_fac * flow_gt), dim=-1)  # reduce on spatial dim
+            error = error * pts_weights[:, 1]
+
+            loss_steps = torch.sum(error)
+
+        loss_dict[f'{log_prefix}loss_steps'] = loss_steps * \
+            self.crit_flow_weight
+        # CP3 has loss= 0.5 * MSE(flow,5*gt_flow) + BCE(mask,gt_mask)
+        loss_dict[f'{log_prefix}loss'] += loss_dict[f'{log_prefix}loss_steps']
+
+        return loss_dict
 
     def validation_step(self, batch, batch_idx):
+
+        log = {}
+
+        with torch.no_grad():
+            val_losses = self.compute_loss(batch, log_prefix='val_')
+            log.update(val_losses)
+
         images: torch.Tensor = batch['image']
         batch_size, _, h, w = images.shape
         thresholds = [0.5, 0.75, 0.9]
@@ -300,8 +381,8 @@ class CrossGooseModel(lightning.LightningModule):
             masks_pred=masks_pred,
             threshold=thresholds
         )
-        log = {f"val_ap_{t}": float(np.nanmean(ap[:, i]))
-               for i, t in enumerate(thresholds)}
+        log.update({f"val_ap_{t}": float(np.nanmean(ap[:, i]))
+                    for i, t in enumerate(thresholds)})
 
         self.log_dict(log, batch_size=batch_size, on_epoch=True)
 
@@ -321,6 +402,10 @@ class CrossGooseModel(lightning.LightningModule):
         _, c, h, w = image.shape
         if c == 1:
             image = torch.tile(image, (1, 2, 1, 1))
+        elif c >= 2:
+            image = image[:, :2]
+        else:
+            raise ValueError(c)
 
         features = self.image_to_maps(image, apply_sigmoids=True)
         emb_grid_t = features['emb_grid_t']
@@ -372,10 +457,9 @@ class CrossGooseModel(lightning.LightningModule):
         self,
         image: torch.Tensor
     ):
-        assert len(image.shape) == 4, "expects grayscale images (for now)"
+        assert len(image.shape) == 4
         b, c, h, w = image.shape
         assert b == 1
-        assert c in [1, 2]
 
         timings = {}
         results = {}

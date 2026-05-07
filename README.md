@@ -65,3 +65,16 @@ python main.py eval_models --config configs/eval.yaml
 - **Shared embedding architecture**: new `shared_embedding` option to use the same embedding for both u0 and ut, reducing model parameters
 - **Embedding visualization**: added notebook and utilities to view learned embeddings
 - **Model configuration**: added `model_sharedemb.yaml` config for shared embedding training
+
+### v1.3.5
+- **Trajectory-based training**: new `TrajectorySampler` and `train_on_trajectories` option to learn from full point trajectories instead of just (u0, ut) pairs
+- **Time-error weighting**: `time_error_weighting` option to balance loss contribution across time steps
+- **CPLike flow function**: new `FlowFunction` variant that uses only `et` embedding (CellPose-like)
+- **Improved GridFlow**: 
+  - new `from_labels()` method for direct label array loading
+  - `keep_largest_component()` to handle non-contiguous masks
+  - threaded `query_multiple_labels_threaded()` for faster queries
+- **2-channel image support**: model now handles both grayscale and multi-channel images (`grayscale` flag in dataset)
+- **Enhanced point sampling**: `RandomOnCellV2` with improved random sampling within instances
+- **Augmentation updates**: fixed patching and transforms for multi-channel images
+- **New configs**: multiple versioned configs (1.3.0 through 1.3.5) for reproducibility

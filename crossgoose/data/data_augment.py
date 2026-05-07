@@ -30,7 +30,7 @@ def random_transform(
 ):
     # expects no bach dim
     transforms = dict()
-    assert len(image.shape) == 2
+    assert len(image.shape) == 3
 
     if scale_range is not None or rotate:
         if scale_range is not None:
@@ -48,14 +48,14 @@ def random_transform(
             'translate': (0, 0),
             'shear': (0, 0)
         }
-        h, w = image.shape
+        c, h, w = image.shape
         center = (h/2, w/2)
         image = v2.functional.affine(
-            image.unsqueeze(dim=0),
+            image,
             **affine_transform,
             interpolation=InterpolationMode.BILINEAR,
             fill=v_fill_img
-        )[0]
+        )
         labels = v2.functional.affine(
             labels.unsqueeze(dim=0),
             **affine_transform,
@@ -78,15 +78,15 @@ def random_transform(
         transforms['affine'] = affine_transform
 
     if patch_size is None:
-        h, w = image.shape
+        c, h, w = image.shape
         ypad1, ypad2, xpad1, xpad2 = get_pad_yx(
             h, w, div=16, extra=1, min_size=None)
         patch_size = max(h+xpad1+xpad2, w+ypad1+ypad2)
 
-    if any(s < patch_size for s in image.shape):
+    if any(s < patch_size for s in image.shape[-2:]):
         # print(f"shape {tuple(image.shape)} too small for patch size {patch_size}")
-        d0 = max(0, patch_size - image.shape[0])
-        d1 = max(0, patch_size - image.shape[1])
+        d0 = max(0, patch_size - image.shape[-2])
+        d1 = max(0, patch_size - image.shape[-1])
         padding = (
             d1 // 2, d1 - d1//2, d0 // 2, d0 - d0//2
         )
@@ -97,14 +97,14 @@ def random_transform(
 
         flows = flows.pad(padding)
 
-        assert len(image.shape) == 2
+        assert len(image.shape) == 3
 
         assert all(
-            s >= patch_size for s in image.shape), "oops messed up the padding"
+            s >= patch_size for s in image.shape[-2:]), "oops messed up the padding"
 
     if deterministic_patch:
-        i = image.shape[0]//2 - patch_size//2
-        j = image.shape[1]//2 - patch_size//2
+        i = image.shape[-2]//2 - patch_size//2
+        j = image.shape[-1]//2 - patch_size//2
         h = patch_size
         w = patch_size
     else:
@@ -127,7 +127,7 @@ def random_transform(
         labels = v2.functional.hflip(labels)
         if overlap_mask is not None:
             overlap_mask = v2.functional.hflip(overlap_mask)
-        flows = flows.flip(mode='h', shape=image.shape)
+        flows = flows.flip(mode='h', shape=image.shape[-2:])
         transforms['flip_h'] = True
     else:
         transforms['flip_h'] = False
@@ -137,18 +137,18 @@ def random_transform(
         labels = v2.functional.vflip(labels)
         if overlap_mask is not None:
             overlap_mask = v2.functional.vflip(overlap_mask)
-        flows = flows.flip(mode='v', shape=image.shape)
+        flows = flows.flip(mode='v', shape=image.shape[-2:])
         transforms['flip_v'] = True
     else:
         transforms['flip_v'] = False
 
     if rot90:
         k = int(torch.randint(0, 4, size=(1,)))
-        image = torch.rot90(image, k=k, dims=(0, 1))
-        labels = torch.rot90(labels, k=k, dims=(0, 1))
+        image = torch.rot90(image, k=k, dims=(-2, -1))
+        labels = torch.rot90(labels, k=k, dims=(-2, -1))
         if overlap_mask is not None:
-            overlap_mask = torch.rot90(overlap_mask, k=k, dims=(0, 1))
-        h, w = image.shape
+            overlap_mask = torch.rot90(overlap_mask, k=k, dims=(-2, -1))
+        c, h, w = image.shape
         flows = flows.affine_transform(
             angle=-k*90, center=(h/2, w/2)
         )
