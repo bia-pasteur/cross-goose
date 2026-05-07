@@ -3,16 +3,25 @@
 
 implementation of _Improving Gradient Flow methods for instance segmentation of crossing objects_ J. Mabon & J.C. Olivo-Marin, submitted to ISBI 2026
 
-## Installation
+
+Cite as:
+```
+J Mabon, J C Olivo-Marin. Improving Gradient Flow Methods for Instance Segmentation of Crossing Objects. 
+2026 IEEE International Symposium on Biomedical Imaging, IEEE, Apr 2026, London, United Kingdom. 
+```
+[📄 Paper on HAL](https://hal.science/hal-05614392)
+
+
+## 👩🏻‍💻 Installation
 Setup the environment with [conda/mamba](https://github.com/conda-forge/miniforge) :
 ```bash
 mamba create -f env.yaml -y
 mamba activate crossgoose
 ```
 
-## Training
+## 🏋🏼‍♀️ Training
 
-### preparing the data
+### Preparing the data
 ```bash
 # get the data
 mkdir -p data/BBBC010_v2_images 
@@ -32,7 +41,7 @@ python main.py make_synth_dataset --config configs/synth_dataset.yaml
 ```
 
 
-### train
+### Train
 
 ```bash
 python train.py fit --config configs/model.yaml
@@ -43,3 +52,16 @@ python train.py fit --config configs/model.yaml
 ```bash
 python main.py eval_models --config configs/eval.yaml
 ```
+
+## 🌟 Updates
+### v1.1.1
+- **GridFlow optimization**: major refactor of flow computation with `BatchGridFlow` for faster precomputing
+- **Data pipeline refactor**: moved sampling to dataloader, reorganized `crossgoose/data/` module structure
+- **Threading improvements**: added threaded point sampling for faster data loading
+- **Configuration updates**: new model config system (`model2.yaml`), updated defaults
+- **Bug fixes**: fixed normalization vector, gridflow augmentation, and removed CUDA flow compute
+
+### v1.2.1
+- **Shared embedding architecture**: new `shared_embedding` option to use the same embedding for both u0 and ut, reducing model parameters
+- **Embedding visualization**: added notebook and utilities to view learned embeddings
+- **Model configuration**: added `model_sharedemb.yaml` config for shared embedding training
