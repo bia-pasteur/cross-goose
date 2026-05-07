@@ -1,4 +1,8 @@
-""" A compact way to store flows for overlapping labels
+"""A compact way to store and query flow fields for overlapping object labels.
+
+GridFlow provides efficient storage of flow vectors at sparse point locations
+per label, with interpolation for querying arbitrary positions. Supports
+augmentation operations (rotation, scaling, flip, crop, pad) and batched queries.
 """
 
 import concurrent
@@ -22,6 +26,19 @@ def _single_mask_to_flow(
     center_method: CenterMethod,
     n_iter: int | None = None,
 ):
+    """Compute flow field for a single-instance mask using the CellPose approach.
+
+    Extends center values outward to generate a potential field, then computes
+    gradients to obtain flow vectors pointing toward the center.
+
+    Args:
+        mask: Binary mask (H, W) with values 0 or 1.
+        center_method: Method to compute the center point ('centroid', 'medoid', etc.).
+        n_iter: Number of extension iterations. If None, defaults to 2*(H+W).
+
+    Returns:
+        Flow field array of shape (2, H, W) with normalized flow vectors.
+    """
     assert np.max(mask) < 2  # we just do one instance
     ly, lx = mask.shape
     y, x = np.nonzero(mask)
@@ -46,6 +63,14 @@ def _single_mask_to_flow(
 def keep_largest_component(
         mask: np.ndarray
 ) -> np.ndarray:
+    """Keep only the largest connected component in a mask.
+
+    Args:
+        mask: Binary or integer label mask.
+
+    Returns:
+        Binary mask containing only the largest connected component.
+    """
     labels = skimage.measure.label(mask)
     unique_labels, counts_labels = np.unique(
         labels[mask > 0], return_counts=True)
@@ -60,6 +85,23 @@ def _mask_to_pts_and_flw(
     contour_sub_sampling: int,
     contour_method: Literal['marching_squares', 'dilation']
 ):
+    """Extract points and flows from a mask by sampling contour and interior.
+
+    Computes a flow field for the mask, then samples points along the contour
+    and in the interior at specified densities.
+
+    Args:
+        mask: Binary mask (H, W).
+        flow_center_method: Method to compute flow center.
+        inside_sub_sampling: Subsampling factor for interior points.
+        contour_sub_sampling: Subsampling factor for contour points.
+        contour_method: 'marching_squares' for precise contours or 'dilation'.
+
+    Returns:
+        Tuple of (points, flows) where:
+            - points: (N, 2) array of (y, x) coordinates.
+            - flows: (N, 2) array of flow vectors at each point.
+    """
     mask_size = np.sum(mask)
     assert mask_size > 0
     assert len(mask.shape) == 2, mask.shape
@@ -120,12 +162,25 @@ def _mask_to_pts_and_flw(
 
 
 class GridFlow:
+    """Sparse flow field representation per label using KD-trees for interpolation.
+
+    Stores flow vectors at discrete point locations for each label, enabling
+    efficient queries at arbitrary positions via k-nearest neighbor interpolation.
+    Supports augmentation operations and serialization.
+    """
     def __init__(
         self,
         points: Dict[str, np.ndarray],
         flows: Dict[str, np.ndarray],
         n_interpol: int
     ):
+        """Initialize GridFlow with points and flows for each label.
+
+        Args:
+            points: Dictionary mapping label IDs to (N, 2) point coordinate arrays.
+            flows: Dictionary mapping label IDs to (N, 2) flow vector arrays.
+            n_interpol: Number of neighbors to use for interpolation.
+        """
         self.n_interpol = n_interpol
 
         for k in points.keys():
@@ -150,6 +205,19 @@ class GridFlow:
         contour_method: Literal['marching_squares',
                                 'dilation'] = 'marching_squares',
     ) -> Self:
+        """Construct GridFlow from one-hot encoded labels.
+
+        Args:
+            labels_one_hot: One-hot mask array (K, H, W) where K is the number of labels.
+            n_interpol: Number of neighbors for interpolation.
+            flow_center_method: Method to compute flow centers.
+            inside_sub_sampling: Subsampling factor for interior points.
+            contour_sub_sampling: Subsampling factor for contour points.
+            contour_method: 'marching_squares' for precise contours or 'dilation'.
+
+        Returns:
+            GridFlow instance with flows computed for each label.
+        """
         assert len(labels_one_hot.shape) == 3
         points: Dict[str, KDTree] = {}
         flows: Dict[str, np.ndarray] = {}
@@ -187,6 +255,19 @@ class GridFlow:
         contour_method: Literal['marching_squares',
                                 'dilation'] = 'marching_squares',
     ) -> Self:
+        """Construct GridFlow from integer label mask.
+
+        Args:
+            labels: Integer label mask (H, W) where 0 is background.
+            n_interpol: Number of neighbors for interpolation.
+            flow_center_method: Method to compute flow centers.
+            inside_sub_sampling: Subsampling factor for interior points.
+            contour_sub_sampling: Subsampling factor for contour points.
+            contour_method: 'marching_squares' for precise contours or 'dilation'.
+
+        Returns:
+            GridFlow instance with flows computed for each label.
+        """
         assert len(labels.shape) == 2
         points: Dict[str, KDTree] = {}
         flows: Dict[str, np.ndarray] = {}
@@ -215,7 +296,11 @@ class GridFlow:
         )
 
     def to_file(self, file: Path):
+        """Save GridFlow to a compressed .npz file.
 
+        Args:
+            file: Output path with .npz extension.
+        """
         file = Path(file)
         assert file.suffix == '.npz'
 
@@ -229,6 +314,15 @@ class GridFlow:
 
     @classmethod
     def from_file(self, file: Path, n_interpol) -> Self:
+        """Load GridFlow from a .npz file.
+
+        Args:
+            file: Path to .npz file containing points and flows arrays.
+            n_interpol: Number of neighbors for interpolation.
+
+        Returns:
+            GridFlow instance loaded from file.
+        """
         data = np.load(file)
         points = {}
         flows = {}
@@ -250,6 +344,15 @@ class GridFlow:
         )
 
     def query_multiple_labels(self, pos: np.ndarray, labels: np.ndarray) -> np.ndarray:
+        """Query flows at multiple positions for multiple labels.
+
+        Args:
+            pos: Query positions (N, 2) as (y, x) coordinates.
+            labels: Label ID for each position (N,).
+
+        Returns:
+            Interpolated flow vectors (N, 2).
+        """
         assert len(pos.shape) == 2
         assert pos.shape[-1] == 2
         assert pos.shape[0] == labels.shape[0]
@@ -269,6 +372,17 @@ class GridFlow:
         return vec
 
     def query_multiple_labels_threaded(self, pos: np.ndarray, labels: np.ndarray) -> np.ndarray:
+        """Query flows at multiple positions for multiple labels using threading.
+
+        Parallelizes queries across unique labels for improved performance.
+
+        Args:
+            pos: Query positions (N, 2) as (y, x) coordinates.
+            labels: Label ID for each position (N,).
+
+        Returns:
+            Interpolated flow vectors (N, 2).
+        """
         assert len(pos.shape) == 2
         assert pos.shape[-1] == 2
         assert pos.shape[0] == labels.shape[0]
@@ -299,6 +413,20 @@ class GridFlow:
         return vec
 
     def query(self, pos: np.ndarray, label: int) -> np.ndarray:
+        """Query flow vectors at given positions for a specific label.
+
+        Uses k-nearest neighbor interpolation from stored point locations.
+
+        Args:
+            pos: Query positions (N, 2) as (y, x) coordinates.
+            label: Label ID to query.
+
+        Returns:
+            Interpolated and normalized flow vectors (N, 2).
+
+        Raises:
+            KeyError: If label is not present in the GridFlow.
+        """
         assert pos.shape[-1] == 2
         if label not in self.points.keys():
             raise KeyError(
@@ -331,12 +459,22 @@ class GridFlow:
         return vec
 
     def query_flow_grid(self, label: int, shape: Tuple[int, int]) -> np.ndarray:
+        """Query flows on a dense grid for a given label.
+
+        Args:
+            label: Label ID to query.
+            shape: Output shape (H, W).
+
+        Returns:
+            Dense flow field (2, H, W).
+        """
         h, w = shape
         pts = np.reshape(np.mgrid[:h, :w], (2, -1)).transpose()
         flow = self.query(pos=pts, label=label).transpose().reshape((2, h, w))
         return flow
 
     def get_label_keys(self) -> List[int]:
+        """Return list of label IDs present in the GridFlow."""
         return list(self.points.keys())
 
     def affine_transform(
@@ -347,7 +485,21 @@ class GridFlow:
         translate: Tuple[float, float] = (0, 0),
         shear: Tuple[float, float] = (0, 0),
     ) -> Self:
+        """Apply affine transformation to points and flows.
 
+        Args:
+            center: Center of rotation/scaling (cx, cy).
+            scale: Scaling factor.
+            angle: Rotation angle in degrees.
+            translate: Translation vector (tx, ty).
+            shear: Shear angles (not implemented).
+
+        Returns:
+            New GridFlow with transformed points and flows.
+
+        Raises:
+            NotImplementedError: If shear is non-zero.
+        """
         if shear != (0, 0):
             raise NotImplementedError
 
@@ -370,6 +522,14 @@ class GridFlow:
         )
 
     def pad(self, padding: Tuple[int, int, int, int]) -> Self:
+        """Shift all points by a padding offset.
+
+        Args:
+            padding: Tuple (top, bottom, left, right).
+
+        Returns:
+            New GridFlow with points shifted by (left, top).
+        """
         offset = np.array([[padding[2], padding[0]]])
         return GridFlow(
             points={k: offset + v.data for k, v in self.points.items()},
@@ -378,6 +538,18 @@ class GridFlow:
         )
 
     def crop(self, top: int, left: int, height: int, width: int, drop_oob: bool = False) -> Self:
+        """Crop the GridFlow to a region of interest.
+
+        Args:
+            top: Top crop coordinate.
+            left: Left crop coordinate.
+            height: Height of the cropped region.
+            width: Width of the cropped region.
+            drop_oob: If True, drop labels with points outside the crop bounds.
+
+        Returns:
+            New cropped GridFlow.
+        """
         offset = np.array([[-top, -left]])
         new_points = {}
         new_flows = {}
@@ -402,6 +574,18 @@ class GridFlow:
         )
 
     def flip(self, mode: Literal['h', 'v'], shape: Tuple[int]) -> Self:
+        """Flip points and flows horizontally or vertically.
+
+        Args:
+            mode: 'h' for horizontal flip, 'v' for vertical flip.
+            shape: Image shape (H, W) for computing flipped coordinates.
+
+        Returns:
+            New flipped GridFlow.
+
+        Raises:
+            ValueError: If mode is not 'h' or 'v'.
+        """
         h, w = shape
         new_flows = {}
         new_points = {}
@@ -424,6 +608,11 @@ class GridFlow:
         )
 
     def relabel(self, mapping: Dict[int, int]):
+        """Relabel the GridFlow according to a mapping.
+
+        Args:
+            mapping: Dictionary mapping old label IDs to new label IDs.
+        """
         self.points = {new_key: self.points[old_key]
                        for new_key, old_key in mapping.items()}
         self.flows = {new_key: self.flows[old_key]
@@ -445,6 +634,17 @@ class GridFlow:
 
 
 def get_affine_transform_matrix(translation, center, rot, scale):
+    """Compute a 2x3 affine transformation matrix.
+
+    Args:
+        translation: Translation vector (tx, ty).
+        center: Center point (cx, cy) for rotation/scaling.
+        rot: Rotation angle in radians.
+        scale: Scaling factor.
+
+    Returns:
+        2x3 affine transformation matrix.
+    """
     # https://docs.pytorch.org/vision/main/_modules/torchvision/transforms/functional.html#affine
     tx, ty = translation
     cx, cy = center
@@ -463,6 +663,15 @@ def get_affine_transform_matrix(translation, center, rot, scale):
 
 
 def get_rotation_matrix(angle: float, degree: bool = False) -> np.ndarray:
+    """Compute a 2D rotation matrix.
+
+    Args:
+        angle: Rotation angle (in radians unless degree=True).
+        degree: If True, interpret angle as degrees.
+
+    Returns:
+        2x2 rotation matrix.
+    """
     if degree:
         angle = math.radians(angle)
     return np.array([[np.cos(angle), -np.sin(angle)],
@@ -470,12 +679,30 @@ def get_rotation_matrix(angle: float, degree: bool = False) -> np.ndarray:
 
 
 def _transform_points(x: np.ndarray, transform_matrix: np.ndarray) -> np.ndarray:
+    """Apply affine transform to point coordinates.
+
+    Args:
+        x: Points array (N, 2).
+        transform_matrix: 2x3 affine transformation matrix.
+
+    Returns:
+        Transformed points (N, 2).
+    """
     x = np.matmul(transform_matrix, np.concat(
         [x, np.ones((x.shape[0], 1))], axis=1).T).T
     return x[:, :2]
 
 
 def _transform_flows(x: np.ndarray, angle: float) -> np.ndarray:
+    """Apply rotation to flow vectors (translation and scale have no effect).
+
+    Args:
+        x: Flow vectors (N, 2).
+        angle: Rotation angle in degrees.
+
+    Returns:
+        Rotated flow vectors (N, 2).
+    """
     # translate and scale have no effect
     if angle != 0.0:
         rot_matrix = get_rotation_matrix(-angle, degree=True)
@@ -485,13 +712,24 @@ def _transform_flows(x: np.ndarray, angle: float) -> np.ndarray:
 
 
 class BatchGridFlow:
+    """Batch container for multiple GridFlow instances supporting parallel queries.
+
+    Wraps a list of GridFlow instances (one per batch element) and provides
+    efficient batched queries across labels and batch indices using threading.
+    """
     def __init__(
         self,
         gridflows: List[GridFlow]
     ):
+        """Initialize BatchGridFlow with a list of GridFlow instances.
+
+        Args:
+            gridflows: List of GridFlow instances, one per batch element.
+        """
         self.gridflows: List[GridFlow] = gridflows
 
     def __getitem__(self, key) -> GridFlow:
+        """Get a GridFlow by index."""
         return self.gridflows[key]
 
     def batch_query_multiple_labels(
@@ -500,6 +738,18 @@ class BatchGridFlow:
         batch_indices: np.ndarray,
         labels: np.ndarray,
     ) -> np.ndarray:
+        """Query flows for multiple positions across multiple batch elements.
+
+        Parallelizes queries across batch indices using threading for efficiency.
+
+        Args:
+            pos: Query positions (N, 2) as (y, x) coordinates.
+            batch_indices: Batch index for each position (N,).
+            labels: Label ID for each position (N,).
+
+        Returns:
+            Interpolated flow vectors (N, 2).
+        """
         assert pos.shape[0] == batch_indices.shape[0]
         assert pos.shape[0] == labels.shape[0]
         n_pts = pos.shape[0]

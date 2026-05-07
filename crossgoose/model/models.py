@@ -36,6 +36,23 @@ Ckptcriterion = Literal['last', 'best_ap_0.5', 'best_ap_0.75', 'best_ap_0.9']
 
 
 class CrossGooseModel(lightning.LightningModule):
+    """Lightning module for Cross-Goose instance segmentation model.
+
+    Combines a CellPose-style backbone with embedding-based flow prediction
+    to segment crossing/overlapping objects. Supports both standard (u0, ut)
+    pair training and full trajectory-based learning.
+
+    Args:
+        flow_fn: Function computing flow from embeddings (e.g. MLP).
+        embeddings_dim: Dimension of the embedding space.
+        crit_flow_weight: Weight for the flow loss term.
+        crit_cellprob_weight: Weight for the cell probability loss term.
+        n_steps: Number of flow-following steps for inference.
+        backbone_realease_delay: Epoch at which to unfreeze the backbone.
+        shared_embedding: If True, use same embedding for u0 and ut (fewer params).
+        train_on_trajectories: If True, train on full trajectories instead of pairs.
+        time_error_weighting: If True, weight errors by timestep in trajectory mode.
+    """
     def __init__(
         self,
         flow_fn: FlowFunction,
@@ -88,21 +105,19 @@ class CrossGooseModel(lightning.LightningModule):
 
     @staticmethod
     def load_model(model: str = 'default', ckpt_crit: Ckptcriterion = 'last') -> CrossGooseModel:
-        """loads a model
+        """Load a pretrained model from directory or saved models.
+
         Args:
-            model (str): path to a directory or name of a default model (eg 'default')
-                If path to a directory, it should have format like: 
-                    ├── checkpoints
-                    │   ├── best-epoch=163-step=181712-val_ap_0.5=0.9320.ckpt
-                    │   ├── best-epoch=223-step=248192-val_ap_0.9=0.2635.ckpt
-                    │   ├── best-epoch=38-step=43212-val_ap_0.75=0.8247.ckpt
-                    │   └── last.ckpt
-                    └── config.yaml
-            ckpt_crit (Ckptcriterion) : if model is a directory, 
-                one of 'last', 'best_ap_0.5', 'best_ap_0.75', 'best_ap_0.9'
+            model: Path to model directory or name of a default model. If a directory,
+                should contain `checkpoints/` with .ckpt files and `config.yaml`.
+            ckpt_crit: Checkpoint selection criterion when loading from directory.
+                One of 'last', 'best_ap_0.5', 'best_ap_0.75', 'best_ap_0.9'.
 
         Returns:
-            CrossGooseModel: loaded model
+            Loaded CrossGooseModel instance.
+
+        Raises:
+            FileNotFoundError: If model directory or checkpoint not found.
         """
         if os.path.isdir(model):
             return CrossGooseModel._load_model_from_dir(model, ckpt_crit=ckpt_crit)
@@ -188,6 +203,19 @@ class CrossGooseModel(lightning.LightningModule):
         )
 
     def image_to_maps(self, image, apply_sigmoids: bool = False):
+        """Pass image through backbone and heads to produce embedding and cell prob maps.
+
+        Args:
+            image: Input tensor of shape (B, C, H, W).
+            apply_sigmoids: If True, apply sigmoid to cell probability output.
+
+        Returns:
+            Dictionary with keys:
+                - 'T1': Full output tensor from embedding head.
+                - 'emb_grid_0': Embedding grid for u0 (B, dim_emb, H, W).
+                - 'emb_grid_t': Embedding grid for ut (shares with emb_grid_0 if shared_embedding).
+                - 'cp_est': Cell probability estimate (B, H, W).
+        """
         assert len(image.shape) == 4
 
         T0, _, _ = self.backbone(image)
@@ -210,6 +238,16 @@ class CrossGooseModel(lightning.LightningModule):
         return res
 
     def forward(self, image: torch.Tensor, u0: torch.Tensor, ut: torch.Tensor):
+        """Forward pass computing flow prediction and cell probability for given points.
+
+        Args:
+            image: Input image tensor (B, C, H, W).
+            u0: Starting point coordinates (B, 3) with (batch_idx, y, x).
+            ut: Target point coordinates (B, 3) with (batch_idx, y, x).
+
+        Returns:
+            Tuple of (flow_pred, cell_prob, embedding_features, overlap_est).
+        """
         _, c, _, _ = image.shape
 
         if c == 1:
@@ -231,7 +269,15 @@ class CrossGooseModel(lightning.LightningModule):
         return dP, features['cp_est'], features['T1'], features.get('overlap_est', None)
 
     def _gather_emb_batch(self, raster: torch.Tensor, u: torch.Tensor):
-        # expects raster of shape (B,dim_emb,H,W)
+        """Gather embeddings from a raster grid at specified point coordinates.
+
+        Args:
+            raster: Embedding grid of shape (B, dim_emb, H, W).
+            u: Point coordinates (..., 3) with (batch_idx, y, x).
+
+        Returns:
+            Gathered embeddings at the specified coordinates.
+        """
         # TODO decorelate the batch id (u[:, 0]) to the other coordinates
         idx0 = u[..., 0].long()
         idx1 = u[..., 1].long()
@@ -240,7 +286,16 @@ class CrossGooseModel(lightning.LightningModule):
         return gathered_emb
 
     def _sample_gtflows_batch(self, flow_grid_gt: BatchGridFlow, l0: torch.Tensor, ut: torch.Tensor):
+        """Sample ground truth flows from a BatchGridFlow at multiple point locations.
 
+        Args:
+            flow_grid_gt: Ground truth flow grid.
+            l0: Initial label values.
+            ut: Target point coordinates (B, 3) with (batch_idx, y, x).
+
+        Returns:
+            Sampled flows as tensor on the same device as ut.
+        """
         flows = flow_grid_gt.batch_query_multiple_labels(
             pos=ut[..., 1:].detach().cpu().numpy(),
             labels=l0.detach().cpu().numpy(),
@@ -259,6 +314,16 @@ class CrossGooseModel(lightning.LightningModule):
         return loss_dict['loss']
 
     def compute_loss(self, batch, log_prefix: str = ''):
+        """Compute the total loss combining cell probability and flow losses.
+
+        Args:
+            batch: Batch dictionary with 'image', 'labels', 'pts_coord', 'pts_flows',
+                'pts_weights', and 'pts_batch'.
+            log_prefix: Prefix for loss dictionary keys (e.g., 'val_').
+
+        Returns:
+            Dictionary of loss terms.
+        """
         labels: torch.Tensor = batch['labels']
         nchan = batch['image'].shape[1]
         if nchan == 1:
@@ -398,6 +463,18 @@ class CrossGooseModel(lightning.LightningModule):
         u0: torch.Tensor | None = None,
         skip_logging: bool = False,
     ):
+        """Simulate point dynamics by following predicted flows for n_steps.
+
+        Args:
+            image: Input image tensor (B, C, H, W).
+            n_steps: Number of flow-following iterations.
+            as_numpy: If True, return results as numpy arrays.
+            u0: Initial points. If None, all foreground pixels are used.
+            skip_logging: If True, only log final positions (saves memory).
+
+        Returns:
+            Tuple of (foreground_mask, trajectory_or_final_positions, features).
+        """
 
         _, c, h, w = image.shape
         if c == 1:
@@ -457,6 +534,17 @@ class CrossGooseModel(lightning.LightningModule):
         self,
         image: torch.Tensor
     ):
+        """Segment a single image by following flows and computing masks.
+
+        Args:
+            image: Input image tensor (1, C, H, W).
+
+        Returns:
+            Dictionary with keys:
+                - 'mask': Segmentation mask (H, W) with instance IDs.
+                - 'cellprob': Cell probability map (H, W).
+                - 'timings': Dictionary with 'follow_flow' and 'compute_masks' times.
+        """
         assert len(image.shape) == 4
         b, c, h, w = image.shape
         assert b == 1
