@@ -218,8 +218,8 @@ class CrossGooseModel(lightning.LightningModule):
         """
         assert len(image.shape) == 4
 
-        T0, _, _ = self.backbone(image)
-        T1 = self.embedding_head(T0)
+        T1, _, _ = self.backbone(image)
+        T1 = self.embedding_head(T1)
 
         res = {'T1': T1}
 
