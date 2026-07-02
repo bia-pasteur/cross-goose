@@ -31,6 +31,19 @@ mamba create -f env.yaml -y
 mamba activate crossgoose
 ```
 
+### Install with pip
+```bash
+mamba create -n crossgoose python=3.12
+mamba activate crossgoose
+pip install git+https://github.com/bia-pasteur/cross-goose
+```
+
+### Install from repo
+After you cloned the repo, from the root of the repo:
+```bash
+pip install -e .
+```
+
 ## 🏋🏼‍♀️ Training
 
 ### Preparing the data
